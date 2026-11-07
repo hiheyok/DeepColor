@@ -8,6 +8,7 @@ import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.Hdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
+import dev.deepcolor.core.PipelineRouter;
 import dev.deepcolor.gui.DeepColorConfigScreen;
 import dev.deepcolor.gui.GradientScreen;
 import java.awt.image.BufferedImage;
@@ -21,6 +22,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -28,6 +30,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -55,6 +58,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		this.checkSodiumPage(context);
 
 		this.checkGradient(context);
+		this.checkReloadReleasesPipelines(context);
 
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
 			world.getServer().runCommand("time set midnight");
@@ -94,6 +98,13 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			context.setScreen(() -> new DeepColorConfigScreen(null));
 			context.waitTicks(10);
 			context.takeScreenshot("06_config");
+			int lowestWidget = context.computeOnClient(minecraft -> minecraft.gui.screen().children().stream()
+				.filter(child -> child instanceof AbstractWidget)
+				.mapToInt(child -> ((AbstractWidget) child).getBottom())
+				.max().orElse(0));
+			int footer = context.computeOnClient(minecraft -> DeepColorConfigScreen.footerY(minecraft.gui.screen().height));
+			this.log("config screen: lowest widget ends at " + lowestWidget + ", restart notice starts at " + footer);
+			this.check("config screen buttons stay clear of the restart notice", lowestWidget > 0 && lowestWidget <= footer);
 			context.setScreen(() -> null);
 
 			context.getInput().pressKey(InputConstants.KEY_F3);
@@ -156,6 +167,22 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		context.takeScreenshot("01b_sodium");
 		context.setScreen(() -> new TitleScreen());
 		context.waitTicks(3);
+	}
+
+	/** A resource reload closes and recompiles every pipeline. The router must not keep the old ones. */
+	private void checkReloadReleasesPipelines(ClientGameTestContext context) {
+		int[] tracked = new int[4];
+		for (int reload = 0; reload < tracked.length; reload++) {
+			if (reload > 0) {
+				CompletableFuture<Void> done = context.computeOnClient(Minecraft::reloadResourcePacks);
+				context.waitFor(minecraft -> done.isDone(), 1200);
+				context.waitTicks(5);
+			}
+			tracked[reload] = context.computeOnClient(minecraft -> PipelineRouter.trackedPipelines());
+		}
+		this.log("pipelines tracked by the router across reloads: " + Arrays.toString(tracked));
+		// The first reload may compile pipelines that were still lazy at startup, so compare after it.
+		this.check("resource reloads do not pile up closed pipelines", tracked[3] <= tracked[1]);
 	}
 
 	private void checkModMenu() {

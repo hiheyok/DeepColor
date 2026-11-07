@@ -18,6 +18,13 @@ public final class DeepColorConfigScreen extends Screen {
 	private static final int WIDGET_WIDTH = 150;
 	private static final int GAP = 10;
 	private static final int ROW_HEIGHT = 24;
+	private static final int SECTION_GAP = 12;
+	/** Six rows of options, two section gaps, and the Done button. */
+	private static final int CONTENT_HEIGHT = 6 * ROW_HEIGHT + 2 * SECTION_GAP + 20;
+	/** The restart notice is drawn this far above the bottom edge, and nothing may reach into it. */
+	private static final int FOOTER_HEIGHT = 20;
+	/** Below the title. */
+	private static final int MIN_TOP = 24;
 
 	private final @Nullable Screen parent;
 
@@ -31,7 +38,9 @@ public final class DeepColorConfigScreen extends Screen {
 		DeepColorConfig config = DeepColorConfig.get();
 		int left = this.width / 2 - WIDGET_WIDTH - GAP / 2;
 		int right = this.width / 2 + GAP / 2;
-		int y = this.height / 6;
+		// A sixth of the way down looks best, but at small GUI sizes (a height of 240) that pushes the
+		// Done button into the restart notice. Move up as far as needed, but not into the title.
+		int y = Math.max(MIN_TOP, Math.min(this.height / 6, this.height - FOOTER_HEIGHT - CONTENT_HEIGHT));
 
 		this.addRenderableWidget(CycleButton.onOffBuilder(config.dither)
 			.create(left, y, WIDGET_WIDTH, 20, Component.translatable("deepcolor.option.dither"), (button, value) -> config.dither = value));
@@ -45,7 +54,7 @@ public final class DeepColorConfigScreen extends Screen {
 		this.addRenderableWidget(Button.builder(Component.translatable("deepcolor.config.gradient"), button -> this.minecraft.gui.setScreen(new GradientScreen(this)))
 			.bounds(right, y, WIDGET_WIDTH, 20)
 			.build());
-		y += ROW_HEIGHT + 12;
+		y += ROW_HEIGHT + SECTION_GAP;
 		this.addRenderableWidget(enumButton(left, y, "output_bits", DeepColorConfig.OutputBits.values(), config.outputBits, value -> config.outputBits = value));
 		this.addRenderableWidget(enumButton(right, y, "internal_format", DeepColorConfig.InternalFormat.values(), config.internalFormat, value -> config.internalFormat = value));
 		y += ROW_HEIGHT;
@@ -53,7 +62,7 @@ public final class DeepColorConfigScreen extends Screen {
 		this.addRenderableWidget(enumButton(right, y, "hdr_mapping", DeepColorConfig.HdrMapping.values(), config.hdrMapping, value -> config.hdrMapping = value));
 		y += ROW_HEIGHT;
 		this.addRenderableWidget(new GammaSlider(left, y, config));
-		y += ROW_HEIGHT + 12;
+		y += ROW_HEIGHT + SECTION_GAP;
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds(this.width / 2 - 100, y, 200, 20)
 			.build());
@@ -71,7 +80,12 @@ public final class DeepColorConfigScreen extends Screen {
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
 		super.extractRenderState(graphics, mouseX, mouseY, a);
 		graphics.centeredText(this.font, this.title, this.width / 2, 12, 0xFFFFFFFF);
-		graphics.centeredText(this.font, Component.translatable("deepcolor.config.restart"), this.width / 2, this.height - 16, 0xFFA0A0A0);
+		graphics.centeredText(this.font, Component.translatable("deepcolor.config.restart"), this.width / 2, footerY(this.height), 0xFFA0A0A0);
+	}
+
+	/** Top of the restart notice. */
+	public static int footerY(int height) {
+		return height - FOOTER_HEIGHT + 4;
 	}
 
 	@Override
