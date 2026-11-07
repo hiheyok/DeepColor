@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "deepcolor",
+	"version": "${version}",
+	"name": "Deep Color",
+	"description": "Reduces dark-scene banding: renders above 8 bits per channel, outputs 10-bit where the driver allows it, and dithers the final image. SDR only.",
+	"authors": ["Deep Color contributors"],
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.deepcolor.DeepColor"],
+		"modmenu": ["dev.deepcolor.compat.DeepColorModMenu"],
+		"sodium:config_api_user": ["dev.deepcolor.compat.DeepColorSodiumOptions"]
+	},
+	"mixins": ["deepcolor.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"sodium": "*",
+		"iris": "*",
+		"modmenu": "*"
+	}
+}

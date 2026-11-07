@@ -1,0 +1,329 @@
+{
+	"_comment": "Jobs for tools/parallel_gametest.py. mods: vanilla, sodium or iris. pack is needed for iris jobs to load a shader pack (pass --pack). config is written to config/deepcolor.json. The hdr jobs force the scRGB path and pretend Windows HDR is on, so they also run with HDR off. Sodium defaults to 0.9.3-beta.1 because Iris 1.11.7 breaks with later betas; the -newest jobs test the latest Sodium without Iris.",
+	"jobs": [
+		{
+			"name": "gl",
+			"backend": "opengl",
+			"mods": "vanilla"
+		},
+		{
+			"name": "vk",
+			"backend": "vulkan",
+			"mods": "vanilla"
+		},
+		{
+			"name": "gl-sodium",
+			"backend": "opengl",
+			"mods": "sodium"
+		},
+		{
+			"name": "vk-sodium",
+			"backend": "vulkan",
+			"mods": "sodium"
+		},
+		{
+			"name": "gl-sodium-newest",
+			"backend": "opengl",
+			"mods": "sodium",
+			"sodium": "mc26.3-0.9.3-beta.3-fabric"
+		},
+		{
+			"name": "vk-sodium-newest",
+			"backend": "vulkan",
+			"mods": "sodium",
+			"sodium": "mc26.3-0.9.3-beta.3-fabric"
+		},
+		{
+			"name": "gl-iris",
+			"backend": "opengl",
+			"mods": "iris",
+			"pack": true
+		},
+		{
+			"name": "vk-iris",
+			"backend": "vulkan",
+			"mods": "iris",
+			"pack": true
+		},
+		{
+			"name": "gl-out8",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"outputBits": "8"
+			}
+		},
+		{
+			"name": "vk-out8",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"outputBits": "8"
+			}
+		},
+		{
+			"name": "gl-dither10",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"ditherBits": "10"
+			}
+		},
+		{
+			"name": "vk-dither10",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"ditherBits": "10"
+			}
+		},
+		{
+			"name": "vk-gradient-noise",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"noisePattern": "gradient",
+				"ditherBits": "10"
+			}
+		},
+		{
+			"name": "gl-rgb10a2",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGB10A2_UNORM"
+			}
+		},
+		{
+			"name": "vk-rgb10a2",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGB10A2_UNORM"
+			}
+		},
+		{
+			"name": "gl-rgba16unorm",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGBA16_UNORM"
+			}
+		},
+		{
+			"name": "vk-rgba16unorm",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGBA16_UNORM"
+			}
+		},
+		{
+			"name": "gl-rgba8",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGBA8_UNORM"
+			}
+		},
+		{
+			"name": "vk-rgba8",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGBA8_UNORM"
+			}
+		},
+		{
+			"name": "gl-nodither",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"dither": false
+			}
+		},
+		{
+			"name": "vk-nodither",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"dither": false
+			}
+		},
+		{
+			"name": "vk-static",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"temporal": false
+			}
+		},
+		{
+			"name": "vk-skip",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"internalFormat": "RGB10A2_UNORM",
+				"dither": false
+			}
+		},
+		{
+			"name": "vk-hdr",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true"
+			]
+		},
+		{
+			"name": "gl-hdr",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true"
+			]
+		},
+		{
+			"name": "vk-hdr-sodium",
+			"backend": "vulkan",
+			"mods": "sodium",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true"
+			]
+		},
+		{
+			"name": "gl-hdr-iris",
+			"backend": "opengl",
+			"mods": "iris",
+			"pack": true,
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true"
+			]
+		},
+		{
+			"name": "vk-scrgb-sdr",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true"
+			]
+		},
+		{
+			"name": "vk-hdr-real",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on"
+			}
+		},
+		{
+			"name": "vk-hdr-dark",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrUiNits": 90,
+				"shadowCurve": "gamma24"
+			}
+		},
+		{
+			"name": "gl-hdr-gamma",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrGamma": 2.65
+			}
+		},
+		{
+			"name": "vk-hdr-floor",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrGamma": 2.5,
+				"hdrUiNits": 90,
+				"hdrShadowFloor": 0.05
+			}
+		},
+		{
+			"name": "gl-hdr-dim-wide",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrUiNits": 50,
+				"hdrGamutStretch": 1.0
+			}
+		},
+		{
+			"name": "vk-hdr-bt2020",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrGamutStretch": 1.0,
+				"hdrGamutTarget": "bt2020"
+			}
+		},
+		{
+			"name": "gl-hdr-adobe",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on",
+				"hdrGamutStretch": 0.6,
+				"hdrGamutTarget": "adobe"
+			}
+		},
+		{
+			"name": "gl-hdr-real",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"config": {
+				"hdrOutput": "on"
+			}
+		},
+		{
+			"name": "gl-iris-rgba8",
+			"backend": "opengl",
+			"mods": "iris",
+			"pack": true,
+			"config": {
+				"internalFormat": "RGBA8_UNORM"
+			}
+		},
+		{
+			"name": "gl-iris-hdr-real",
+			"backend": "opengl",
+			"mods": "iris",
+			"pack": true,
+			"config": {
+				"hdrOutput": "on"
+			}
+		},
+		{
+			"name": "gl-iris-modoff",
+			"backend": "opengl",
+			"mods": "iris",
+			"pack": true,
+			"fakeHdr": true
+		},
+		{
+			"name": "gl-hdrmod",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"fakeHdr": true
+		},
+		{
+			"name": "vk-hdrmod",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"fakeHdr": true
+		}
+	]
+}

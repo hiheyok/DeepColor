@@ -1,0 +1,7 @@
+{
+	"schemaVersion": 1,
+	"id": "hdr_mod",
+	"version": "0.0.0",
+	"name": "Stand-in for HDR Mod, used to test that Deep Color disables itself",
+	"environment": "client"
+}

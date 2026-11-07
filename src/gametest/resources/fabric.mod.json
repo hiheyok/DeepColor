@@ -1,0 +1,14 @@
+{
+	"schemaVersion": 1,
+	"id": "deepcolor-test",
+	"version": "1.0.0",
+	"name": "Deep Color tests",
+	"environment": "client",
+	"entrypoints": {
+		"fabric-client-gametest": ["dev.deepcolor.test.DeepColorClientTest"]
+	},
+	"mixins": ["deepcolor-test.mixins.json"],
+	"depends": {
+		"deepcolor": "*"
+	}
+}

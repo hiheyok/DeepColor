@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"package": "dev.deepcolor.test.mixin",
+	"compatibilityLevel": "JAVA_25",
+	"minVersion": "0.8",
+	"client": [
+		"ThreadingImplMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

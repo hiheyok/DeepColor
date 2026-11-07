@@ -1,0 +1,156 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+repositories {
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
+		content { includeGroup 'maven.modrinth' }
+	}
+	maven {
+		name = 'TerraformersMC'
+		url = 'https://maven.terraformersmc.com/releases'
+		content { includeGroup 'com.terraformersmc' }
+	}
+}
+
+// Test matrix switches. Each combination gets its own run directory so options.txt,
+// iris.properties and worlds never leak between runs:
+//   -Pdc.backend=opengl|vulkan   -Pdc.sodium   -Pdc.iris
+def dcBackend = providers.gradleProperty('dc.backend').getOrElse('opengl')
+def dcIris = providers.gradleProperty('dc.iris').isPresent()
+def dcSodium = dcIris || providers.gradleProperty('dc.sodium').isPresent()
+def dcSodiumVersion = providers.gradleProperty('dc.sodiumVersion').getOrElse(project.sodium_version)
+def dcRunDir = "run/${dcBackend}${dcIris ? '-iris' : dcSodium ? '-sodium' : ''}"
+
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = 'deepcolor-test'
+		enableGameTests = false
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
+loom {
+	mods {
+		"deepcolor" {
+			sourceSet sourceSets.main
+		}
+	}
+
+	runs {
+		configureEach {
+			runDir = dcRunDir
+			programArgs '--graphicsBackend', dcBackend
+		}
+	}
+}
+
+dependencies {
+	// To change the versions see the gradle.properties file
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	compileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
+	compileOnly "maven.modrinth:sodium:${project.sodium_version}"
+
+	if (dcSodium) {
+		localRuntime "maven.modrinth:sodium:${dcSodiumVersion}"
+		localRuntime "com.terraformersmc:modmenu:${project.modmenu_version}"
+	}
+	if (providers.gradleProperty('dc.fakeHdr').isPresent()) {
+		localRuntime files('src/gametest/fake-hdr-mod')
+	}
+	if (dcIris) {
+		localRuntime "maven.modrinth:iris:${project.iris_version}"
+	}
+}
+
+// runClientGameTest wipes its run directory first, so test setup has to happen after that.
+// Iris reads the backend from options.txt, not from --graphicsBackend, so it is written here too.
+//   -Pdc.pack=C:/path/to/shaderpack.zip   -Pdc.config='{"outputBits":"8"}'   -Pdc.fakeHdr
+tasks.named('runClientGameTest') {
+	def pack = providers.gradleProperty('dc.pack')
+	def configJson = providers.gradleProperty('dc.config')
+	def runDirectory = layout.projectDirectory.dir(dcRunDir)
+	def backend = dcBackend
+	doFirst {
+		def root = runDirectory.asFile
+		new File(root, 'options.txt').text = "preferredGraphicsBackend:\"${backend}\"\n"
+		if (configJson.isPresent()) {
+			def config = new File(root, 'config')
+			config.mkdirs()
+			new File(config, 'deepcolor.json').text = configJson.get()
+		}
+		if (pack.isPresent()) {
+			def source = new File(pack.get())
+			def packs = new File(root, 'shaderpacks')
+			packs.mkdirs()
+			java.nio.file.Files.copy(source.toPath(), new File(packs, source.name).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+			def config = new File(root, 'config')
+			config.mkdirs()
+			new File(config, 'iris.properties').text = "enableShaders=true\nshaderPack=${source.name}\n"
+		}
+	}
+}
+
+// Writes the exact command runClientGameTest would use, so tools/parallel_gametest.py can start
+// several game instances at once. Gradle itself cannot: runs in one project wait for each other.
+// The mod set (vanilla, -Pdc.sodium, -Pdc.iris) changes the classpath, so there is one file per set.
+tasks.register('writeGameTestLaunch') {
+	def run = tasks.named('runClientGameTest', JavaExec)
+	def variant = (dcIris ? 'iris' : dcSodium ? 'sodium' : 'vanilla') + (providers.gradleProperty('dc.sodiumVersion').isPresent() ? '-' + dcSodiumVersion : '')
+	def output = layout.buildDirectory.file("gametest-launch/${variant}.json")
+	// Everything the run needs (classes, Loom launch files), but not the run itself.
+	dependsOn { run.get().taskDependencies.getDependencies(run.get()).findAll { it.name != 'deleteGameTestRunDir' } }
+	outputs.file(output)
+	outputs.upToDateWhen { false }
+	doLast {
+		def task = run.get()
+		def launch = [
+			java      : task.javaLauncher.get().executablePath.asFile.absolutePath,
+			jvmArgs   : task.allJvmArgs,
+			mainClass : task.mainClass.get(),
+			classpath : task.classpath.files.collect { it.absolutePath },
+			args      : task.args,
+		]
+		def file = output.get().asFile
+		file.parentFile.mkdirs()
+		file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(launch))
+	}
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	withSourcesJar()
+
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+
+	from("LICENSE") {
+		rename { "${it}_$projectName"}
+	}
+}

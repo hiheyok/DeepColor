@@ -1,0 +1,30 @@
+{
+	"required": true,
+	"package": "dev.deepcolor.mixin",
+	"plugin": "dev.deepcolor.mixin.DeepColorMixinPlugin",
+	"compatibilityLevel": "JAVA_25",
+	"minVersion": "0.8",
+	"client": [
+		"debug.DebugScreenEntriesMixin",
+		"debug.DebugScreenEntryListMixin",
+		"output.FrontendGpuSurfaceMixin",
+		"output.GameRendererMixin",
+		"output.GlBackendMixin",
+		"output.ScreenshotMixin",
+		"output.VulkanGpuSurfaceMixin",
+		"output.VulkanInstanceMixin",
+		"pipeline.FrontendRenderPassMixin",
+		"pipeline.PipelineBuilderMixin",
+		"pipeline.RenderPipelineInvoker",
+		"upgrade.LevelRendererMixin",
+		"upgrade.LightmapMixin",
+		"upgrade.MainTargetMixin",
+		"upgrade.PostChainMixin"
+	],
+	"mixinextras": {
+		"minVersion": "0.5.0"
+	},
+	"injectors": {
+		"defaultRequire": 0
+	}
+}
