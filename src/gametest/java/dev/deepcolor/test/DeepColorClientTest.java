@@ -1,8 +1,10 @@
 package dev.deepcolor.test;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.renderpearl.api.GpuFormat;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
+import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.Hdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
@@ -15,8 +17,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -376,7 +380,27 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		if (!config.dither) {
 			// With noise the widest pair changes about 60%, so this leaves room for scene motion.
 			this.check("no noise in the world image with dither off", changedShare < 20.0);
+			GpuFormat internal = context.computeOnClient(minecraft -> Formats.internal());
+			if (first.bits() == 10 && internal != GpuFormat.RGBA8_UNORM) {
+				// Without dither nothing should round the image to 8-bit levels: a deeper scene keeps the
+				// in-between codes, and fog and sky gradients always produce some.
+				double offGrid = 100.0 * offEightBitGrid(first) / first.red().length;
+				this.log(String.format(Locale.ROOT, "world with dither off: %.1f%% of pixels between 8-bit levels", offGrid));
+				this.check("dither off keeps the full 10-bit output", offGrid > 1.0);
+			}
 		}
+	}
+
+	/** Pixels whose 10-bit code is not one that an 8-bit level is written as. */
+	private static long offEightBitGrid(OutputProbe.Capture capture) {
+		long count = 0;
+		for (int code : capture.red()) {
+			int level = (int) Math.floor(code * 255.0 / 1023.0 + 0.5);
+			if (code != (int) Math.ceil(level * 1023.0 / 255.0 - 0.001)) {
+				count++;
+			}
+		}
+		return count;
 	}
 
 	private void checkGradient(ClientGameTestContext context) {
@@ -450,6 +474,9 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			OutputProbe.Capture back = capture(context, OutputProbe::captureBackBuffer);
 			long noDither = distinctInRow(back, rows[2]);
 			this.log("OpenGL back buffer, strip 2: " + noDither + " distinct 10-bit codes");
+			// A count alone would also pass a black or misplaced image, so the strip must also hold the
+			// same ramp as the dither target.
+			this.check("OpenGL back buffer shows the undithered strip of the dither target", backBufferMatches(back, first, rows[2]));
 			if (bits == 10) {
 				this.check("OpenGL back buffer holds real 10-bit values", noDither > 100);
 			} else {
@@ -509,6 +536,27 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * The back buffer is read as 10-bit codes, the dither target holds codes of its own depth. Labels
+	 * sit at the far left, so the left third is skipped. The rest of the strip spans about 22 8-bit
+	 * levels, which a black or wrongly placed image cannot match.
+	 */
+	private static boolean backBufferMatches(OutputProbe.Capture back, OutputProbe.Capture target, int row) {
+		if (back.width() != target.width() || back.height() != target.height()) {
+			return false;
+		}
+		double toBack = 1023.0 / ((1 << target.bits()) - 1);
+		Set<Integer> levels = new HashSet<>();
+		for (int x = target.width() / 3; x < target.width(); x++) {
+			int expected = (int) Math.round(target.code(x, row) * toBack);
+			if (Math.abs(back.code(x, row) - expected) > 1) {
+				return false;
+			}
+			levels.add(target.code(x, row));
+		}
+		return levels.size() >= 16;
 	}
 
 	private static boolean blackColumnIsZero(OutputProbe.Capture capture, int[] rows) {

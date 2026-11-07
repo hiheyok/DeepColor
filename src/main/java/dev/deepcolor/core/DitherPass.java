@@ -80,8 +80,12 @@ public final class DitherPass {
 			ensureTarget(source, outputFormat);
 			float strength = config.dither ? config.ditherStrength : 0.0F;
 			float offset = config.temporal ? (float) ((frame * GOLDEN_RATIO) % 1.0) : 0.0F;
+			// The shader rounds to the dither depth. Without dither there is no reason to round coarser
+			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
+			// screen keeps the dither depth: its dithered strip always dithers, to show what it does.
+			int quantizeBits = config.dither || gradientMode != 0 ? OutputState.ditherBits() : bits;
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
-				OutputState.ditherBits(), strength, offset, gradientMode);
+				quantizeBits, strength, offset, gradientMode);
 			OutputProbe.onFramePresented(target, bits);
 			return Objects.requireNonNull(targetView);
 		} catch (RuntimeException e) {
