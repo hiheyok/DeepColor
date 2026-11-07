@@ -20,6 +20,7 @@ layout(push_constant) uniform DeepColorParams {
     float floorScale;
     float gamutStretch;
     int gamutTarget;
+    float unitNits;
 };
 #else
 uniform float ditherLsb;
@@ -36,6 +37,7 @@ uniform int hdrActive;
 uniform float floorScale;
 uniform float gamutStretch;
 uniform int gamutTarget;
+uniform float unitNits;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -160,7 +162,8 @@ vec3 stretchGamut(vec3 light) {
     return mix(light, toRec709 * light, gamutStretch);
 }
 
-// scRGB is linear light where 1.0 means 80 nits. With Windows HDR on, SDR white goes to the chosen
+// scRGB is linear light where 1.0 means 80 nits (unitNits; on macOS EDR 1.0 is SDR white, counted as
+// 203 nits). With HDR on, SDR white goes to the chosen
 // interface brightness and the shadow curve is applied here, so Windows' own sRGB decoding of SDR
 // apps (the washed-out look) never happens. With Windows HDR off the compositor maps scRGB 0..1
 // back to SDR, so the plain sRGB decode reproduces the normal image exactly.
@@ -198,7 +201,7 @@ vec3 hdrPattern(int strip) {
             return vec3(0.0);
         }
         float nits = pow(10.0, mix(-4.0, 0.0, (x - 0.05) / 0.95));
-        float value = nits / 80.0;
+        float value = nits / unitNits;
         return vec3(strip == 1 ? toe(value) : value);
     }
     if (strip == 2) {
@@ -206,7 +209,7 @@ vec3 hdrPattern(int strip) {
         if (fract(cell) < 0.12) {
             return vec3(0.0);
         }
-        return vec3(PATCH_NITS[int(min(cell, 7.0))] / 80.0);
+        return vec3(PATCH_NITS[int(min(cell, 7.0))] / unitNits);
     }
     return encodeScrgb(vec3(x * GRADIENT_MAX));
 }

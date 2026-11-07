@@ -171,7 +171,7 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 
 	/**
 	 * A nits slider whose lowest position means "automatic". Stored as 0, which the config reads as
-	 * the value Windows reports.
+	 * the value the system reports.
 	 */
 	private static net.caffeinemc.mods.sodium.api.config.structure.IntegerOptionBuilder nitsOption(
 		ConfigBuilder builder, String key, int min, int max, int step, int defaultNits, Consumer<Integer> setter, Supplier<Integer> getter, DeepColorConfig config

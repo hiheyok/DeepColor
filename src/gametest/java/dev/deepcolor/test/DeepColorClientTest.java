@@ -246,9 +246,9 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	private void checkScrgbEncoding(ClientGameTestContext context) {
 		OutputProbe.Capture capture = capture(context, OutputProbe::captureDitherTarget);
 		boolean active = context.computeOnClient(minecraft -> Hdr.active());
-		float uiScale = context.computeOnClient(minecraft -> Hdr.uiNits()) / Hdr.SCRGB_NITS;
-		float floorScale = DeepColorConfig.get().hdrShadowFloor / Hdr.SCRGB_NITS;
-		this.log("scRGB output, HDR " + (active ? "active" : "inactive") + ", interface white " + uiScale * Hdr.SCRGB_NITS + " nits");
+		float uiScale = context.computeOnClient(minecraft -> Hdr.uiNits()) / Hdr.unitNits();
+		float floorScale = DeepColorConfig.get().hdrShadowFloor / Hdr.unitNits();
+		this.log("scRGB output, HDR " + (active ? "active" : "inactive") + ", interface white " + uiScale * Hdr.unitNits() + " nits");
 		// With HDR active the screen shows the near-black pattern, whose bottom strip is the game's own
 		// shades. Without HDR it shows the SDR strips, where strip 2 is the plain ramp.
 		int row = active ? capture.height() / 8 : capture.height() - 1 - capture.height() * 5 / 8;
@@ -320,7 +320,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				if (Math.abs(x - cx) < 12 && Math.abs(y - cy) < 12) {
 					continue;
 				}
-				double nits = capture.value(x, y) * Hdr.SCRGB_NITS;
+				double nits = capture.value(x, y) * Hdr.unitNits();
 				sum += nits;
 				max = Math.max(max, nits);
 				count++;

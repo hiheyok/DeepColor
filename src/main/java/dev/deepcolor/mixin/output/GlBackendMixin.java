@@ -6,6 +6,8 @@ import com.mojang.renderpearl.backend.opengl.GlBackend;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
 import dev.deepcolor.core.Hdr;
+import dev.deepcolor.core.MacEdr;
+import dev.deepcolor.core.OutputState;
 import org.lwjgl.sdl.SDLError;
 import org.lwjgl.sdl.SDLVideo;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,12 +22,17 @@ abstract class GlBackendMixin {
 	)
 	private long deepcolor$createWindow(CharSequence title, int width, int height, long flags, Operation<Long> original) {
 		if (Hdr.requested() && Hdr.displayHdrEnabled()) {
-			// Windows composites a 16-bit float OpenGL window as scRGB.
+			// Windows composites a 16-bit float OpenGL window as scRGB. On macOS the view has to opt in
+			// to EDR itself, see MacEdr.
 			deepcolor$requestColorBits(16, 16);
 			SDLVideo.SDL_GL_SetAttribute(SDLVideo.SDL_GL_FLOATBUFFERS, 1);
 			SDLVideo.SDL_GL_SetAttribute(SDLVideo.SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0);
 			long window = original.call(title, width, height, flags);
 			if (window != 0L) {
+				OutputState.glFloatRequested();
+				if (Hdr.isMacOs()) {
+					MacEdr.enable(window);
+				}
 				return window;
 			}
 			DeepColor.LOGGER.warn("Could not create a floating-point OpenGL window ({}), trying 10 bits", SDLError.SDL_GetError());

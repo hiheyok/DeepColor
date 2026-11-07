@@ -33,8 +33,8 @@ import org.lwjgl.system.MemoryUtil;
  * write is the one and only quantization step. An RGBA16_FLOAT target would be worse: near white
  * half floats only resolve about half a 10-bit step, which would truncate the noise.
  *
- * <p>For Windows HDR output the target is 16-bit float scRGB instead, and this pass converts the
- * image to absolute brightness. See {@link Hdr}.
+ * <p>For HDR output (Windows scRGB, or EDR on macOS) the target is 16-bit float linear instead, and
+ * this pass converts the image to absolute brightness. See {@link Hdr}.
  */
 public final class DitherPass {
 	private static final int PUSH_CONSTANT_SIZE = 64;
@@ -151,12 +151,13 @@ public final class DitherPass {
 				constants.putInt(config.noisePattern == DeepColorConfig.NoisePattern.BLUE_NOISE ? 0 : 1);
 				constants.putInt(output == Output.SCRGB ? 1 : 0);
 				constants.putFloat(config.hdrGamma);
-				constants.putFloat(hdrActive ? Hdr.uiNits() / Hdr.SCRGB_NITS : 1.0F);
-				constants.putFloat(hdrActive ? Hdr.peakNits() / Hdr.SCRGB_NITS : 1.0F);
+				constants.putFloat(hdrActive ? Hdr.uiNits() / Hdr.unitNits() : 1.0F);
+				constants.putFloat(hdrActive ? Hdr.peakNits() / Hdr.unitNits() : 1.0F);
 				constants.putInt(hdrActive ? 1 : 0);
-				constants.putFloat(hdrActive ? config.hdrShadowFloor / Hdr.SCRGB_NITS : 0.0F);
+				constants.putFloat(hdrActive ? config.hdrShadowFloor / Hdr.unitNits() : 0.0F);
 				constants.putFloat(hdrActive ? config.hdrGamutStretch : 0.0F);
 				constants.putInt(config.hdrGamutTarget.ordinal());
+				constants.putFloat(Hdr.unitNits());
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

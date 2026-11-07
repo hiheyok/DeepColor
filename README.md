@@ -4,8 +4,11 @@ Client-side Fabric mod for Minecraft Java 26.3 that reduces banding in dark scen
 more than 8 bits per channel, outputs 10-bit where the driver allows it, and dithers the final image
 just before it is quantized.
 
-By default this is an **SDR** mod: it only picks sRGB surfaces. The optional **Windows HDR output**
-(off by default) lets the game use the monitor's full brightness range when Windows HDR is on.
+By default this is an **SDR** mod: it only picks sRGB surfaces. The optional **HDR output** (off by
+default) lets the game use the monitor's full brightness range when Windows HDR is on, or the
+display's EDR headroom on macOS.
+
+Runs on Windows and macOS (see [macOS](#macos) for what differs there).
 
 - Internal targets upgraded to `RGBA16_FLOAT`: the main target, the lightmap, post chains (menu blur)
   and the entity outline target.
@@ -28,7 +31,8 @@ are optional.
 3. Pick a backend in Options > Video Settings > Graphics API, or launch with `--graphicsBackend vulkan`
    or `--graphicsBackend opengl`.
 
-To build it yourself you need a JDK 25 installed, because Loom 1.19 runs Gradle itself on Java 25:
+To build it yourself you need a JDK 25, because Loom 1.19 runs Gradle itself on Java 25. If none is
+installed, Gradle downloads one (see `gradle/gradle-daemon-jvm.properties`):
 
 ```
 ./gradlew build
@@ -78,6 +82,24 @@ Which internal format?
 - `RGBA16_UNORM` clamps to 0-1 exactly like vanilla, which helps if a mod relies on that clamping.
 - `RGB10A2_UNORM` is the lightest, but has only 2 bits of alpha in the main target.
 - `RGBA8_UNORM` keeps vanilla targets and leaves only the output and dither features.
+
+## macOS
+
+- **Use the Vulkan backend** (`--graphicsBackend vulkan`, which runs on Metal through MoltenVK) for
+  10-bit SDR output. macOS OpenGL offers no 10-bit window formats, so in SDR on OpenGL the mod dithers
+  for 8 bits and logs that once.
+- `ditherBits` `auto` dithers for 8 bits, since macOS has no exclusive fullscreen. If your display keeps
+  10 bits through the compositor, try `10` and compare with the gradient screen.
+- **HDR output works on both backends.** Vulkan uses an FP16 extended linear sRGB swapchain, which
+  macOS shows with EDR. On OpenGL, SDL does not enable EDR, so Deep Color asks for a float window and
+  then turns on `wantsExtendedDynamicRangeOpenGLSurface` for its view and sets the window to extended
+  linear sRGB itself. Both then show the same image. OpenGL HDR is what makes HDR possible together
+  with Iris shader packs on a Mac.
+- macOS has no absolute nits: 1.0 on the surface is SDR white at whatever brightness is set. Deep Color
+  counts SDR white as 203 nits (BT.2408 reference white), so the default `hdrUiNits` of 203 puts menus
+  exactly at SDR white, and every nits setting is relative to that. `hdrPeakNits` `0` follows the
+  current EDR headroom, which macOS raises once the game shows HDR content and lowers as the display
+  brightness goes up.
 
 ## Windows HDR output
 

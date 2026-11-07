@@ -14,6 +14,7 @@ public final class OutputState {
 	private static int bits = 8;
 	private static boolean scrgb;
 	private static boolean initialized;
+	private static boolean glFloatRequested;
 
 	private OutputState() {
 	}
@@ -29,7 +30,12 @@ public final class OutputState {
 		scrgb = floatScrgb;
 	}
 
-	/** The surface is 16-bit float scRGB, for Windows HDR output. */
+	/** Called when the OpenGL window was created with a floating-point framebuffer requested. */
+	public static void glFloatRequested() {
+		glFloatRequested = true;
+	}
+
+	/** The surface is 16-bit float linear (scRGB, or extended linear sRGB on macOS), for HDR output. */
 	public static boolean isScrgb() {
 		return scrgb;
 	}
@@ -45,11 +51,19 @@ public final class OutputState {
 			GlOutput.Result result = GlOutput.query();
 			surface = result.description();
 			bits = result.bits();
-			scrgb = result.floating();
-			if (Hdr.requested() && !scrgb) {
+			// On macOS a float framebuffer is only HDR once the view has EDR, otherwise it stays SDR.
+			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.enabled());
+			if (glFloatRequested && !result.floating()) {
 				DeepColor.LOGGER.info("HDR output: the driver gave no floating-point OpenGL framebuffer, using SDR output");
+			} else if (result.floating() && !scrgb) {
+				DeepColor.LOGGER.info("HDR output: EDR is not available for the OpenGL view, using SDR output");
+				// The dither pass then writes an 8-bit target, which is what the window shows.
+				bits = 8;
 			}
-			if (!scrgb && wanted10 && bits < 10) {
+			if (!scrgb && wanted10 && bits < 10 && Hdr.isMacOs()) {
+				DeepColor.LOGGER.info("macOS OpenGL offers no 10-bit window formats. Deep Color dithers for {} bits; "
+					+ "use the Vulkan backend for 10-bit output.", bits);
+			} else if (!scrgb && wanted10 && bits < 10) {
 				DeepColor.LOGGER.warn(
 					"The OpenGL default framebuffer has {} bits per channel although 10 were requested. "
 						+ "The driver reported no error. Deep Color keeps running and dithers for {} bits.", bits, bits);
@@ -117,7 +131,7 @@ public final class OutputState {
 								case ADOBE_RGB -> "Adobe RGB";
 								case BT_2020 -> "BT.2020";
 							}) : ""))
-				: "Windows HDR off, plain SDR";
+				: Hdr.isMacOs() ? "no EDR headroom, plain SDR" : "Windows HDR off, plain SDR";
 			return String.format(Locale.ROOT, "%s | surface %s | %s | main %s | %s", backend(), surface, hdr, Formats.internal(), mode);
 		}
 		return String.format(Locale.ROOT, "%s | surface %s | output %d-bit | main %s | dither %s | %s",
