@@ -6,6 +6,8 @@ import com.mojang.renderpearl.backend.opengl.GlBackend;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
 import dev.deepcolor.core.Hdr;
+import dev.deepcolor.core.MacEdr;
+import dev.deepcolor.core.OutputState;
 import org.lwjgl.sdl.SDLError;
 import org.lwjgl.sdl.SDLVideo;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,17 +21,18 @@ abstract class GlBackendMixin {
 		at = @At(value = "INVOKE", target = "Lorg/lwjgl/sdl/SDLVideo;SDL_CreateWindow(Ljava/lang/CharSequence;IIJ)J")
 	)
 	private long deepcolor$createWindow(CharSequence title, int width, int height, long flags, Operation<Long> original) {
-		if (Hdr.requested() && Hdr.isMacOs()) {
-			// A float OpenGL drawable on macOS is shown as plain SDR (no EDR), so linear output would
-			// look wrong. MoltenVK's extended linear sRGB swapchain does get EDR.
-			DeepColor.LOGGER.info("HDR output on macOS needs the Vulkan backend. Using SDR output on OpenGL.");
-		} else if (Hdr.requested() && Hdr.displayHdrEnabled()) {
-			// Windows composites a 16-bit float OpenGL window as scRGB.
+		if (Hdr.requested() && Hdr.displayHdrEnabled()) {
+			// Windows composites a 16-bit float OpenGL window as scRGB. On macOS the view has to opt in
+			// to EDR itself, see MacEdr.
 			deepcolor$requestColorBits(16, 16);
 			SDLVideo.SDL_GL_SetAttribute(SDLVideo.SDL_GL_FLOATBUFFERS, 1);
 			SDLVideo.SDL_GL_SetAttribute(SDLVideo.SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0);
 			long window = original.call(title, width, height, flags);
 			if (window != 0L) {
+				OutputState.glFloatRequested();
+				if (Hdr.isMacOs()) {
+					MacEdr.enable(window);
+				}
 				return window;
 			}
 			DeepColor.LOGGER.warn("Could not create a floating-point OpenGL window ({}), trying 10 bits", SDLError.SDL_GetError());

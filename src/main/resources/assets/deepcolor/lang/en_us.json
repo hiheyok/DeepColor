@@ -36,7 +36,7 @@
 	"deepcolor.option.internal_format.rgb10a2_unorm": "10-bit",
 	"deepcolor.option.internal_format.rgba8_unorm": "8-bit (vanilla)",
 	"deepcolor.option.hdr_output": "HDR output",
-	"deepcolor.option.hdr_output.tooltip": "When Windows HDR is on, the game sets its own brightness in nits instead of using Windows' SDR content brightness slider, and can use the monitor's full range. On macOS it uses the display's EDR headroom, with the Vulkan backend only. Has no effect while HDR is off. Needs a restart.",
+	"deepcolor.option.hdr_output.tooltip": "When Windows HDR is on, the game sets its own brightness in nits instead of using Windows' SDR content brightness slider, and can use the monitor's full range. On macOS it uses the display's EDR headroom. Has no effect while HDR is off. Needs a restart.",
 	"deepcolor.option.hdr_output.off": "Off",
 	"deepcolor.option.hdr_output.on": "On",
 	"deepcolor.option.hdr_ui_nits": "Interface brightness",

@@ -86,12 +86,15 @@ Which internal format?
 ## macOS
 
 - **Use the Vulkan backend** (`--graphicsBackend vulkan`, which runs on Metal through MoltenVK) for
-  10-bit output and HDR. macOS OpenGL offers no 10-bit window formats, so on OpenGL the mod dithers for
-  8 bits and logs that once.
+  10-bit SDR output. macOS OpenGL offers no 10-bit window formats, so in SDR on OpenGL the mod dithers
+  for 8 bits and logs that once.
 - `ditherBits` `auto` dithers for 8 bits, since macOS has no exclusive fullscreen. If your display keeps
   10 bits through the compositor, try `10` and compare with the gradient screen.
-- **HDR output works on Vulkan only.** It uses an FP16 extended linear sRGB swapchain, which macOS shows
-  with EDR. OpenGL stays SDR, because a float OpenGL window gets no EDR there.
+- **HDR output works on both backends.** Vulkan uses an FP16 extended linear sRGB swapchain, which
+  macOS shows with EDR. On OpenGL, SDL does not enable EDR, so Deep Color asks for a float window and
+  then turns on `wantsExtendedDynamicRangeOpenGLSurface` for its view and sets the window to extended
+  linear sRGB itself. Both then show the same image. OpenGL HDR is what makes HDR possible together
+  with Iris shader packs on a Mac.
 - macOS has no absolute nits: 1.0 on the surface is SDR white at whatever brightness is set. Deep Color
   counts SDR white as 203 nits (BT.2408 reference white), so the default `hdrUiNits` of 203 puts menus
   exactly at SDR white, and every nits setting is relative to that. `hdrPeakNits` `0` follows the
