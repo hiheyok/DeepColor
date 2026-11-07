@@ -19,7 +19,11 @@ abstract class GlBackendMixin {
 		at = @At(value = "INVOKE", target = "Lorg/lwjgl/sdl/SDLVideo;SDL_CreateWindow(Ljava/lang/CharSequence;IIJ)J")
 	)
 	private long deepcolor$createWindow(CharSequence title, int width, int height, long flags, Operation<Long> original) {
-		if (Hdr.requested() && Hdr.displayHdrEnabled()) {
+		if (Hdr.requested() && Hdr.isMacOs()) {
+			// A float OpenGL drawable on macOS is shown as plain SDR (no EDR), so linear output would
+			// look wrong. MoltenVK's extended linear sRGB swapchain does get EDR.
+			DeepColor.LOGGER.info("HDR output on macOS needs the Vulkan backend. Using SDR output on OpenGL.");
+		} else if (Hdr.requested() && Hdr.displayHdrEnabled()) {
 			// Windows composites a 16-bit float OpenGL window as scRGB.
 			deepcolor$requestColorBits(16, 16);
 			SDLVideo.SDL_GL_SetAttribute(SDLVideo.SDL_GL_FLOATBUFFERS, 1);

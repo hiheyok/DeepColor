@@ -156,10 +156,10 @@ public final class DeepColorConfig {
 	public HdrOutput hdrOutput = HdrOutput.OFF;
 	/**
 	 * 203 nits is the reference white for SDR content inside HDR (ITU-R BT.2408). 0 means the SDR
-	 * white level set by the Windows slider instead.
+	 * white level set by the Windows slider instead (SDR white on macOS).
 	 */
 	public int hdrUiNits = 203;
-	/** 0 means the peak Windows reports for the display. */
+	/** 0 means the peak the system reports for the display (EDR headroom on macOS). */
 	public int hdrPeakNits = 0;
 	public HdrMapping hdrMapping = HdrMapping.HIGHLIGHTS;
 	/**

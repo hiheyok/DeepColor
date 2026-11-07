@@ -2,13 +2,21 @@ package dev.deepcolor.core;
 
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
+import java.util.Locale;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.sdl.SDLProperties;
 import org.lwjgl.sdl.SDLVideo;
 
 /**
- * Windows HDR output. The game hands Windows a scRGB image (linear, FP16, 1.0 = 80 nits), so it sets
- * brightness in absolute nits itself instead of going through the "SDR content brightness" slider.
+ * HDR output. On Windows the game hands the compositor a scRGB image (linear, FP16, 1.0 = 80 nits),
+ * so it sets brightness in absolute nits itself instead of going through the "SDR content brightness"
+ * slider.
+ *
+ * <p>On macOS the same FP16 extended linear sRGB surface (Vulkan through MoltenVK) is shown with EDR,
+ * where 1.0 is SDR white at whatever brightness the user has set, and the headroom above it changes with
+ * that brightness. macOS has no absolute nits, so SDR white counts as {@link #MACOS_SDR_WHITE_NITS}
+ * (BT.2408 reference white): the default interface brightness then sits exactly at SDR white, and every
+ * nits setting is relative to it.
  *
  * <p>Two system properties exist for automated tests on a machine with Windows HDR off:
  * deepcolor.test.forceScrgb picks the scRGB surface anyway, deepcolor.test.assumeHdr then encodes as
@@ -16,32 +24,39 @@ import org.lwjgl.sdl.SDLVideo;
  */
 public final class Hdr {
 	public static final float SCRGB_NITS = 80.0F;
+	public static final float MACOS_SDR_WHITE_NITS = 203.0F;
+	private static final boolean MACOS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("mac");
 	private static final boolean FORCE_SCRGB = Boolean.getBoolean("deepcolor.test.forceScrgb");
 	private static final boolean ASSUME_HDR = Boolean.getBoolean("deepcolor.test.assumeHdr");
-	/** Used when Windows does not report a peak, and for tests. */
+	/** Used when the system does not report a peak, and for tests. */
 	private static final float FALLBACK_PEAK_NITS = 1000.0F;
 	private static final float FALLBACK_SDR_WHITE_NITS = 203.0F;
 
 	private static @org.jspecify.annotations.Nullable String lastState;
+	private static float lastHeadroom;
 
 	private Hdr() {
 	}
 
 	/**
-	 * Logs what Windows reports whenever it changes. SDL fills in a window's HDR properties a few
-	 * frames after the window appears, and again when Windows HDR is toggled.
+	 * Logs what the system reports whenever it changes. SDL fills in a window's HDR properties a few
+	 * frames after the window appears, and again when HDR is toggled. On macOS the EDR headroom also
+	 * ramps smoothly with the display brightness, so the headroom alone is logged only when it moves
+	 * by more than a quarter.
 	 */
 	public static void logChanges() {
 		long window = window();
 		int display = SDLVideo.SDL_GetDisplayForWindow(window);
-		String state = String.format(java.util.Locale.ROOT, "display HDR %s, window HDR %s, SDR white %.0f nits, headroom %.2f",
+		String state = String.format(Locale.ROOT, "display HDR %s, window HDR %s, SDR white %.0f nits",
 			display != 0 && SDLProperties.SDL_GetBooleanProperty(SDLVideo.SDL_GetDisplayProperties(display), SDLVideo.SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false),
 			windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN),
-			SCRGB_NITS * windowFloat(SDLVideo.SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 0.0F),
-			windowFloat(SDLVideo.SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 0.0F));
-		if (!state.equals(lastState)) {
+			unitNits() * windowFloat(SDLVideo.SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, 0.0F));
+		float headroom = windowFloat(SDLVideo.SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 0.0F);
+		boolean headroomMoved = lastHeadroom <= 0.0F ? headroom != lastHeadroom : Math.abs(headroom / lastHeadroom - 1.0F) > 0.25F;
+		if (!state.equals(lastState) || headroomMoved) {
 			lastState = state;
-			DeepColor.LOGGER.info("Windows reports: {}", state);
+			lastHeadroom = headroom;
+			DeepColor.LOGGER.info("{} reports: {}, headroom {}", MACOS ? "macOS" : "Windows", state, String.format(Locale.ROOT, "%.2f", headroom));
 		}
 	}
 
@@ -58,13 +73,26 @@ public final class Hdr {
 		int display = SDLVideo.SDL_GetPrimaryDisplay();
 		boolean enabled = display != 0 && SDLProperties.SDL_GetBooleanProperty(SDLVideo.SDL_GetDisplayProperties(display), SDLVideo.SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false);
 		if (!enabled) {
-			DeepColor.LOGGER.info("HDR output is on in the config, but Windows HDR is off for the primary display. Using SDR output.");
+			DeepColor.LOGGER.info(MACOS
+				? "HDR output is on in the config, but the primary display has no EDR headroom. Using SDR output."
+				: "HDR output is on in the config, but Windows HDR is off for the primary display. Using SDR output.");
 		}
 		return enabled;
 	}
 
+	/** True on macOS, where 1.0 on the HDR surface is SDR white rather than 80 nits. */
+	public static boolean isMacOs() {
+		return MACOS;
+	}
+
+	/** The brightness that 1.0 on the FP16 surface stands for. */
+	public static float unitNits() {
+		return MACOS ? MACOS_SDR_WHITE_NITS : SCRGB_NITS;
+	}
+
 	/**
-	 * True while the scRGB surface is in use and Windows HDR is on for the window. Checked every frame,
+	 * True while the scRGB surface is in use and HDR is on for the window (Windows HDR, or EDR headroom
+	 * on macOS). Checked every frame,
 	 * so turning Windows HDR off while playing falls back to a plain SDR image instead of clipping.
 	 */
 	public static boolean active() {
@@ -74,7 +102,7 @@ public final class Hdr {
 	/** Brightness of SDR white, which is where the interface sits. */
 	public static float uiNits() {
 		int configured = DeepColorConfig.get().hdrUiNits;
-		return configured > 0 ? configured : windowsSdrWhiteNits();
+		return configured > 0 ? configured : systemSdrWhiteNits();
 	}
 
 	/** Brightest value the world may reach. */
@@ -84,17 +112,21 @@ public final class Hdr {
 		return Math.max(peak, uiNits());
 	}
 
-	public static float windowsSdrWhiteNits() {
+	/** SDR white as the system sets it: the Windows slider, or EDR's 1.0 on macOS. */
+	public static float systemSdrWhiteNits() {
 		if (ASSUME_HDR && !windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN)) {
 			return FALLBACK_SDR_WHITE_NITS;
 		}
-		return SCRGB_NITS * windowFloat(SDLVideo.SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, FALLBACK_SDR_WHITE_NITS / SCRGB_NITS);
+		return unitNits() * windowFloat(SDLVideo.SDL_PROP_WINDOW_SDR_WHITE_LEVEL_FLOAT, FALLBACK_SDR_WHITE_NITS / unitNits());
 	}
 
-	/** Windows knows the panel's peak from the HDR Calibration app or the display's EDID. */
+	/**
+	 * Windows knows the panel's peak from the HDR Calibration app or the display's EDID. macOS reports
+	 * the current EDR headroom, which shrinks as the display brightness goes up.
+	 */
 	public static float displayPeakNits() {
 		float headroom = windowFloat(SDLVideo.SDL_PROP_WINDOW_HDR_HEADROOM_FLOAT, 0.0F);
-		return headroom > 1.0F ? windowsSdrWhiteNits() * headroom : FALLBACK_PEAK_NITS;
+		return headroom > 1.0F ? systemSdrWhiteNits() * headroom : FALLBACK_PEAK_NITS;
 	}
 
 	private static long window() {

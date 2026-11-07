@@ -120,7 +120,7 @@ def run_job(job, pack):
     # Loom's own argfile is shared by every run of the project, so the classpath comes from here.
     jvm_args = [arg for arg in launch['jvmArgs'] if not arg.startswith('@')]
     argfile = run_dir / 'launch.args'
-    argfile.write_text('-cp\n' + ';'.join(argfile_path(entry) for entry in classpath) + '\n')
+    argfile.write_text('-cp\n' + os.pathsep.join(argfile_path(entry) for entry in classpath) + '\n')
     command = [launch['java'], f'@{argfile}', *jvm_args, *job.get('jvmArgs', []), launch['mainClass'], *launch['args'], '--graphicsBackend', job['backend']]
 
     log_path = run_dir / 'output.log'
