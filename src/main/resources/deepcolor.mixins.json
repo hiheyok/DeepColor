@@ -14,6 +14,7 @@
 		"output.VulkanGpuSurfaceMixin",
 		"output.VulkanInstanceMixin",
 		"pipeline.FrontendRenderPassMixin",
+		"pipeline.FrontendRenderPipelineMixin",
 		"pipeline.PipelineBuilderMixin",
 		"pipeline.RenderPipelineInvoker",
 		"upgrade.LevelRendererMixin",

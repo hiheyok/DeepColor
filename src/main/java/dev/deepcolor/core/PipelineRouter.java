@@ -218,6 +218,33 @@ public final class PipelineRouter {
 		UNROUTABLE.clear();
 	}
 
+	/**
+	 * Called when a pipeline is closed, which a resource reload does to every pipeline. Without this,
+	 * pipelines whose formats always match (all of them with an RGBA8 internal target) would never hit
+	 * the cache miss that runs {@link #dropClosedPipelines}, and every reload would keep the closed
+	 * pipelines and their shader sources alive until exit. The router's own variants are closed
+	 * here too, and they are never keys, so this does not recurse into anything that matters.
+	 */
+	public static void forget(CompiledRenderPipeline pipeline) {
+		SOURCES.remove(pipeline);
+		if (!RenderSystem.isOnRenderThread()) {
+			// The render-thread maps are cleaned up on the next cache miss instead.
+			return;
+		}
+		UNROUTABLE.remove(pipeline);
+		List<Variant> variants = VARIANTS.remove(pipeline);
+		if (variants != null && !OutputState.isOpenGl()) {
+			variants.forEach(variant -> variant.compiled.close());
+		}
+	}
+
+	/** Pipelines the router still holds data for, for tests. */
+	public static int trackedPipelines() {
+		synchronized (SOURCES) {
+			return SOURCES.size() + VARIANTS.size() + UNROUTABLE.size();
+		}
+	}
+
 	/** Called on a cache miss, which is rare after startup and always follows a shader reload. */
 	private static void dropClosedPipelines() {
 		VARIANTS.entrySet().removeIf(entry -> {
