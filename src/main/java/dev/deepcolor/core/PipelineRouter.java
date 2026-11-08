@@ -53,7 +53,12 @@ public final class PipelineRouter {
 	private static final Map<CompiledRenderPipeline, Source> SOURCES = Collections.synchronizedMap(new IdentityHashMap<>());
 	/** Render thread only. */
 	private static final Map<FrontendRenderPipeline, List<Variant>> VARIANTS = new Reference2ObjectOpenHashMap<>();
-	private static final Set<CompiledRenderPipeline> UNROUTABLE = Collections.newSetFromMap(new IdentityHashMap<>());
+	/**
+	 * Render thread only. Format combinations a pipeline could not be retargeted to, so that a failed
+	 * compile is not retried every frame. Kept per combination: one that failed says nothing about
+	 * the others.
+	 */
+	private static final Map<CompiledRenderPipeline, List<GpuFormat[]>> UNROUTABLE = new IdentityHashMap<>();
 	/** Set while compiling a variant, whose formats must be kept exactly as they are. */
 	private static final ThreadLocal<Boolean> COMPILING_EXACT = ThreadLocal.withInitial(() -> false);
 
@@ -125,8 +130,13 @@ public final class PipelineRouter {
 				}
 			}
 		}
-		if (UNROUTABLE.contains(frontend)) {
-			return pipeline;
+		List<GpuFormat[]> failed = UNROUTABLE.get(frontend);
+		if (failed != null) {
+			for (int i = 0; i < failed.size(); i++) {
+				if (sameFormats(failed.get(i), attachments)) {
+					return pipeline;
+				}
+			}
 		}
 		dropClosedPipelines();
 		GpuFormat[] formats = new GpuFormat[attachments.size()];
@@ -136,7 +146,7 @@ public final class PipelineRouter {
 		}
 		FrontendRenderPipeline variant = OutputState.isOpenGl() ? retargetCheckOnly(frontend, formats) : compileVariant(frontend, formats);
 		if (variant == null) {
-			UNROUTABLE.add(frontend);
+			UNROUTABLE.computeIfAbsent(frontend, key -> new ArrayList<>(1)).add(formats);
 			return pipeline;
 		}
 		VARIANTS.computeIfAbsent(frontend, key -> new ArrayList<>(2)).add(new Variant(formats, variant));
@@ -253,7 +263,7 @@ public final class PipelineRouter {
 		for (FrontendRenderPipeline pipeline : VARIANTS.keySet()) {
 			closed += pipeline.isClosed() ? 1 : 0;
 		}
-		for (CompiledRenderPipeline pipeline : UNROUTABLE) {
+		for (CompiledRenderPipeline pipeline : UNROUTABLE.keySet()) {
 			closed += pipeline.isClosed() ? 1 : 0;
 		}
 		return closed;
@@ -271,6 +281,6 @@ public final class PipelineRouter {
 			return true;
 		});
 		SOURCES.keySet().removeIf(CompiledRenderPipeline::isClosed);
-		UNROUTABLE.removeIf(CompiledRenderPipeline::isClosed);
+		UNROUTABLE.keySet().removeIf(CompiledRenderPipeline::isClosed);
 	}
 }

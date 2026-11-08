@@ -62,8 +62,8 @@ public final class MacEdr {
 				DeepColor.LOGGER.warn("HDR output: the OpenGL view does not support EDR");
 				return false;
 			}
-			JNI.invokePPV(view, setWants, true, msgSend);
-
+			// EDR goes on last, once the color space is in place: EDR in the default color space
+			// would show the linear image far too dark, and isOn() would report HDR for it.
 			long create = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "CGColorSpaceCreateWithName");
 			long release = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "CGColorSpaceRelease");
 			long nameSymbol = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "kCGColorSpaceExtendedLinearSRGB");
@@ -72,12 +72,22 @@ public final class MacEdr {
 				return false;
 			}
 			long cgColorSpace = JNI.invokePP(MemoryUtil.memGetAddress(nameSymbol), create);
+			if (cgColorSpace == 0L) {
+				DeepColor.LOGGER.warn("HDR output: could not create the extended linear sRGB color space");
+				return false;
+			}
 			long nsColorSpace = JNI.invokePPP(ObjCRuntime.objc_getClass("NSColorSpace"), sel("alloc"), msgSend);
 			nsColorSpace = JNI.invokePPPP(nsColorSpace, sel("initWithCGColorSpace:"), cgColorSpace, msgSend);
+			if (nsColorSpace == 0L) {
+				JNI.invokePV(cgColorSpace, release);
+				DeepColor.LOGGER.warn("HDR output: could not wrap the extended linear sRGB color space");
+				return false;
+			}
 			JNI.invokePPPV(nsWindow, sel("setColorSpace:"), nsColorSpace, msgSend);
 			// The window retains the color space, so both references can go.
 			JNI.invokePPV(nsColorSpace, sel("release"), msgSend);
 			JNI.invokePV(cgColorSpace, release);
+			JNI.invokePPV(view, setWants, true, msgSend);
 			DeepColor.LOGGER.info("HDR output: EDR enabled for the OpenGL view");
 			return true;
 		} catch (Throwable e) {

@@ -193,7 +193,9 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 			.setTooltip(Component.translatable("deepcolor.option." + key + ".tooltip"))
 			.setRange(auto, max, step)
 			.setValueFormatter(value -> value <= auto ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", value))
-			.setDefaultValue(defaultNits == 0 ? auto : defaultNits)
+			// The default must sit on a step too: Sodium falls back to it for any value off the steps,
+			// and "reset to default" would otherwise store 203 while the slider shows 200.
+			.setDefaultValue(defaultNits == 0 ? auto : snap(defaultNits, min, max, step))
 			.setBinding(value -> setter.accept(value <= auto ? 0 : value), () -> getter.get() == 0 ? auto : snap(getter.get(), min, max, step))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 			.setStorageHandler(config::save);

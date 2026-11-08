@@ -13,6 +13,8 @@ final class BlueNoise {
 	static final int SIZE = 64;
 	private static final double SIGMA = 1.5;
 	private static final int RADIUS = 6;
+	/** Every pixel moved ten times over; the real relaxation needs a small fraction of that. */
+	private static final int MAX_RELAXATION_MOVES = SIZE * SIZE * 10;
 
 	private final double[] energy = new double[SIZE * SIZE];
 	private final boolean[] set = new boolean[SIZE * SIZE];
@@ -41,8 +43,11 @@ final class BlueNoise {
 				placed++;
 			}
 		}
-		// Relax the random start: move the tightest cluster into the largest void until stable.
-		while (true) {
+		// Relax the random start: move the tightest cluster into the largest void until stable. That
+		// takes 158 moves for this size and seed. A cap keeps other sizes, sigmas or seeds
+		// that could swap between two states forever from hanging the game; the points are well
+		// spread long before it.
+		for (int move = 0; move < MAX_RELAXATION_MOVES; move++) {
 			int cluster = this.extreme(true);
 			this.toggle(cluster, false);
 			int voidIndex = this.extreme(false);

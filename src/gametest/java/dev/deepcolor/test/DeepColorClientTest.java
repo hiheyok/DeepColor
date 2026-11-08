@@ -110,6 +110,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				world.getConnection().waitForClientboundPackets();
 				context.waitTicks(10);
 				this.checkWorldHdr(context);
+				this.checkHdrScreenshots(context);
 			}
 
 			// The outline target and its blit are another path that does not end in the main target.
@@ -403,6 +404,40 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	 * Share of pixels in the top 70% of the frame (no hotbar) whose green channel changed by more
 	 * than 4 of 255. 8-bit dither in screenshots changes a pixel by at most 2.
 	 */
+	/**
+	 * Screenshots are 8-bit SDR images, so the HDR brightness expansion must not show in them: with
+	 * either mapping they must match the screenshot taken without one. Without undoing it, Linear at
+	 * 1000/203 nits multiplies the world by about 4.9 and Highlights clips bright areas to white.
+	 */
+	private void checkHdrScreenshots(ClientGameTestContext context) {
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		int peak = config.hdrPeakNits;
+		int ui = config.hdrUiNits;
+		context.runOnClient(minecraft -> {
+			config.hdrPeakNits = 1000;
+			config.hdrUiNits = 203;
+		});
+		for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
+			// The sky keeps brightening for a while after "time set noon" (8% of pixels change within
+			// seconds), so each mapping is compared with an SDR screenshot taken just before it.
+			context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
+			context.waitTicks(3);
+			BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + tested.name().toLowerCase(Locale.ROOT));
+			context.runOnClient(minecraft -> config.hdrMapping = tested);
+			context.waitTicks(3);
+			BufferedImage shot = screenshot(context, "hdr_shot_" + tested.name().toLowerCase(Locale.ROOT));
+			double changed = changedShare(plain, shot);
+			this.check(String.format(Locale.ROOT, "screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", tested, changed), changed < 2.0);
+		}
+		context.runOnClient(minecraft -> {
+			config.hdrMapping = mapping;
+			config.hdrPeakNits = peak;
+			config.hdrUiNits = ui;
+		});
+		context.waitTicks(3);
+	}
+
 	private static double changedShare(BufferedImage a, BufferedImage b) {
 		long changed = 0;
 		long total = 0;
@@ -687,6 +722,11 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			}
 		} else {
 			this.log("Vulkan swapchain images have no TRANSFER_SRC usage, back buffer not readable");
+			// A request must still be answered (with nothing), or whatever waits for it never ends.
+			AtomicReference<String> answer = new AtomicReference<>();
+			context.runOnClient(minecraft -> OutputProbe.captureBackBuffer(capture -> answer.set(capture == null ? "none" : "a capture")));
+			context.waitFor(minecraft -> answer.get() != null, 60);
+			this.check("Vulkan back buffer request is answered without a capture (" + answer.get() + ")", "none".equals(answer.get()));
 		}
 		context.setScreen(() -> new TitleScreen());
 		context.waitTicks(3);

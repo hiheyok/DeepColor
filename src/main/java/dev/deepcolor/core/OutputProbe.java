@@ -32,7 +32,7 @@ public final class OutputProbe {
 	private static final int BUFFER_USAGE = GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST;
 
 	private static @Nullable Consumer<Capture> pendingTarget;
-	private static @Nullable Consumer<Capture> pendingBackBuffer;
+	private static @Nullable Consumer<@Nullable Capture> pendingBackBuffer;
 
 	private OutputProbe() {
 	}
@@ -42,8 +42,11 @@ public final class OutputProbe {
 		pendingTarget = callback;
 	}
 
-	/** Captures the OpenGL back buffer after the next blit. Vulkan swapchain images cannot be read. */
-	public static void captureBackBuffer(Consumer<Capture> callback) {
+	/**
+	 * Captures the OpenGL back buffer after the next blit. Vulkan swapchain images cannot be read, so
+	 * there the callback gets null, so that nothing waits for it forever.
+	 */
+	public static void captureBackBuffer(Consumer<@Nullable Capture> callback) {
 		pendingBackBuffer = callback;
 	}
 
@@ -60,7 +63,8 @@ public final class OutputProbe {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;
-			try (GpuBufferSlice.MappedView view = buffer.map(true, false)) {
+			// The buffer goes away whatever happens, also when mapping fails.
+			try (buffer; GpuBufferSlice.MappedView view = buffer.map(true, false)) {
 				ByteBuffer data = view.data();
 				int mask = bits == 10 ? 0x3FF : 0xFF;
 				for (int i = 0; i < red.length; i++) {
@@ -72,20 +76,19 @@ public final class OutputProbe {
 					}
 				}
 			}
-			buffer.close();
 			callback.accept(new Capture("dither target (" + format + ")", bits, width, height, red, values));
 		}, 0);
 	}
 
 	/** Runs right after the backend blit, while the frame is still in the back buffer. */
 	public static void afterBlit(int width, int height) {
-		Consumer<Capture> callback = pendingBackBuffer;
+		Consumer<@Nullable Capture> callback = pendingBackBuffer;
 		if (callback == null) {
 			return;
 		}
 		pendingBackBuffer = null;
-		if (OutputState.isOpenGl()) {
-			callback.accept(new Capture("OpenGL back buffer", 10, width, height, GlOutput.readBackBufferRed(width, height), null));
-		}
+		callback.accept(OutputState.isOpenGl()
+			? new Capture("OpenGL back buffer", 10, width, height, GlOutput.readBackBufferRed(width, height), null)
+			: null);
 	}
 }

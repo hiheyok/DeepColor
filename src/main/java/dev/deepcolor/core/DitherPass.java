@@ -114,10 +114,12 @@ public final class DitherPass {
 	 * with the game's own blit, which only lacks the dither.
 	 */
 	public static RenderTarget flattenForReadback(RenderTarget target) {
-		GpuTextureView source = target.getColorTextureView();
-		if (source == null || source.texture().getFormat() == GpuFormat.RGBA8_UNORM) {
+		GpuTextureView view = target.getColorTextureView();
+		if (view == null || view.texture().getFormat() == GpuFormat.RGBA8_UNORM) {
 			return target;
 		}
+		// With HDR on, the world in the main target is brighter than SDR white. Undo that first.
+		GpuTextureView source = HdrExpandPass.forReadback(view);
 		if (flattened == null || flattened.width != target.width || flattened.height != target.height) {
 			if (flattened != null) {
 				flattened.destroyBuffers();

@@ -31,7 +31,9 @@ import org.lwjgl.sdl.SDLVideo;
 public final class Hdr {
 	public static final float SCRGB_NITS = 80.0F;
 	public static final float MACOS_SDR_WHITE_NITS = 203.0F;
-	private static final boolean MACOS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("mac");
+	private static final String OS_NAME = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+	private static final boolean MACOS = OS_NAME.startsWith("mac");
+	private static final String SYSTEM_NAME = MACOS ? "macOS" : OS_NAME.startsWith("windows") ? "Windows" : "The system";
 	private static final boolean FORCE_SCRGB = Boolean.getBoolean("deepcolor.test.forceScrgb");
 	private static final boolean ASSUME_HDR = Boolean.getBoolean("deepcolor.test.assumeHdr");
 	/** Used when the system does not report a peak, and for tests. */
@@ -51,6 +53,10 @@ public final class Hdr {
 	 * by more than a quarter.
 	 */
 	public static void logChanges() {
+		// Only the HDR surface uses any of this. Without it, skip the SDL queries every frame.
+		if (!OutputState.isScrgb()) {
+			return;
+		}
 		long window = window();
 		int display = SDLVideo.SDL_GetDisplayForWindow(window);
 		String state = String.format(Locale.ROOT, "display HDR %s, window HDR %s, SDR white %.0f nits",
@@ -62,7 +68,7 @@ public final class Hdr {
 		if (!state.equals(lastState) || headroomMoved) {
 			lastState = state;
 			lastHeadroom = headroom;
-			DeepColor.LOGGER.info("{} reports: {}, headroom {}", MACOS ? "macOS" : "Windows", state, String.format(Locale.ROOT, "%.2f", headroom));
+			DeepColor.LOGGER.info("{} reports: {}, headroom {}", SYSTEM_NAME, state, String.format(Locale.ROOT, "%.2f", headroom));
 		}
 	}
 
