@@ -17,14 +17,34 @@ import org.lwjgl.system.macosx.ObjCRuntime;
  * too dark and oversaturated.
  */
 public final class MacEdr {
-	private static boolean enabled;
 
 	private MacEdr() {
 	}
 
-	/** True once the OpenGL view of the game window has EDR switched on. */
-	public static boolean enabled() {
-		return enabled;
+	/**
+	 * Whether the OpenGL view of this window has EDR switched on, asked from the view itself. False
+	 * on other systems and on any error.
+	 */
+	public static boolean isOn(long sdlWindow) {
+		if (!Hdr.isMacOs()) {
+			return false;
+		}
+		try {
+			long nsWindow = SDLProperties.SDL_GetPointerProperty(SDLVideo.SDL_GetWindowProperties(sdlWindow), SDLVideo.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, 0L);
+			if (nsWindow == 0L) {
+				return false;
+			}
+			long msgSend = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
+			long view = JNI.invokePPP(nsWindow, sel("contentView"), msgSend);
+			long wants = sel("wantsExtendedDynamicRangeOpenGLSurface");
+			if (view == 0L || (JNI.invokePPPP(view, sel("respondsToSelector:"), wants, msgSend) & 0xFF) == 0) {
+				return false;
+			}
+			return (JNI.invokePPP(view, wants, msgSend) & 0xFF) != 0;
+		} catch (Throwable e) {
+			DeepColor.LOGGER.warn("HDR output: could not read the EDR state of the OpenGL view", e);
+			return false;
+		}
 	}
 
 	/** Must run on the main thread, which on macOS is the render thread. */
@@ -58,7 +78,6 @@ public final class MacEdr {
 			// The window retains the color space, so both references can go.
 			JNI.invokePPV(nsColorSpace, sel("release"), msgSend);
 			JNI.invokePV(cgColorSpace, release);
-			enabled = true;
 			DeepColor.LOGGER.info("HDR output: EDR enabled for the OpenGL view");
 			return true;
 		} catch (Throwable e) {

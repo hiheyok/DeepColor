@@ -14,7 +14,6 @@ public final class OutputState {
 	private static int bits = 8;
 	private static boolean scrgb;
 	private static boolean initialized;
-	private static boolean glFloatRequested;
 
 	private OutputState() {
 	}
@@ -28,11 +27,6 @@ public final class OutputState {
 		surface = description;
 		bits = outputBits;
 		scrgb = floatScrgb;
-	}
-
-	/** Called when the OpenGL window was created with a floating-point framebuffer requested. */
-	public static void glFloatRequested() {
-		glFloatRequested = true;
 	}
 
 	/** The surface is 16-bit float linear (scRGB, or extended linear sRGB on macOS), for HDR output. */
@@ -52,8 +46,8 @@ public final class OutputState {
 			surface = result.description();
 			bits = result.bits();
 			// On macOS a float framebuffer is only HDR once the view has EDR, otherwise it stays SDR.
-			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.enabled());
-			if (glFloatRequested && !result.floating()) {
+			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.isOn(Minecraft.getInstance().getWindow().handle()));
+			if (GlWindowFormat.requested() == GlWindowFormat.Request.FLOAT && !result.floating()) {
 				DeepColor.LOGGER.info("HDR output: the driver gave no floating-point OpenGL framebuffer, using SDR output");
 			} else if (result.floating() && !scrgb) {
 				DeepColor.LOGGER.info("HDR output: EDR is not available for the OpenGL view, using SDR output");

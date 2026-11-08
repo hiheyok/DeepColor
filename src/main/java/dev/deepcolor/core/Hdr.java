@@ -2,9 +2,15 @@ package dev.deepcolor.core;
 
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
+import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import net.minecraft.client.Minecraft;
+import org.lwjgl.sdl.SDLError;
 import org.lwjgl.sdl.SDLProperties;
+import org.lwjgl.sdl.SDLStdinc;
 import org.lwjgl.sdl.SDLVideo;
 
 /**
@@ -65,19 +71,41 @@ public final class Hdr {
 		return FORCE_SCRGB || DeepColorConfig.get().hdrOutput == DeepColorConfig.HdrOutput.ON;
 	}
 
-	/** Checked before the window and surface exist, so it asks about the primary display. */
+	/**
+	 * Whether any display has HDR on (Windows HDR, or EDR headroom on macOS). The surface is chosen
+	 * while the window still sits on the primary display, where the game always opens it, and cannot
+	 * change later. Asking only about the primary display would rule out HDR on a secondary HDR
+	 * display the window is then moved to. The HDR surface works on an SDR display as well:
+	 * {@link #active()} follows the display the window is on every frame and encodes plain SDR there.
+	 */
 	public static boolean displayHdrEnabled() {
 		if (FORCE_SCRGB) {
 			return true;
 		}
-		int display = SDLVideo.SDL_GetPrimaryDisplay();
-		boolean enabled = display != 0 && SDLProperties.SDL_GetBooleanProperty(SDLVideo.SDL_GetDisplayProperties(display), SDLVideo.SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false);
-		if (!enabled) {
-			DeepColor.LOGGER.info(MACOS
-				? "HDR output is on in the config, but the primary display has no EDR headroom. Using SDR output."
-				: "HDR output is on in the config, but Windows HDR is off for the primary display. Using SDR output.");
+		IntBuffer displays = SDLVideo.SDL_GetDisplays();
+		if (displays == null) {
+			DeepColor.LOGGER.warn("HDR output: SDL could not list the displays ({}), using SDR output", SDLError.SDL_GetError());
+			return false;
 		}
-		return enabled;
+		List<String> hdrDisplays = new ArrayList<>();
+		try {
+			for (int i = 0; i < displays.remaining(); i++) {
+				int display = displays.get(i);
+				if (SDLProperties.SDL_GetBooleanProperty(SDLVideo.SDL_GetDisplayProperties(display), SDLVideo.SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false)) {
+					hdrDisplays.add(Objects.requireNonNullElse(SDLVideo.SDL_GetDisplayName(display), "display " + display));
+				}
+			}
+		} finally {
+			SDLStdinc.SDL_free(displays);
+		}
+		if (hdrDisplays.isEmpty()) {
+			DeepColor.LOGGER.info(MACOS
+				? "HDR output is on in the config, but no display has EDR headroom. Using SDR output."
+				: "HDR output is on in the config, but Windows HDR is off for every display. Using SDR output.");
+			return false;
+		}
+		DeepColor.LOGGER.info("HDR output: HDR is on for {}", String.join(", ", hdrDisplays));
+		return true;
 	}
 
 	/** True on macOS, where 1.0 on the HDR surface is SDR white rather than 80 nits. */

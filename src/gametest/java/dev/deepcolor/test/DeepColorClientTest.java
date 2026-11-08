@@ -8,7 +8,9 @@ import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
 import dev.deepcolor.core.DitherPass;
 import dev.deepcolor.core.Formats;
+import dev.deepcolor.core.GlWindowFormat;
 import dev.deepcolor.core.Hdr;
+import dev.deepcolor.core.MacEdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
 import dev.deepcolor.core.PipelineRouter;
@@ -66,6 +68,24 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			return;
 		}
 		this.log("STATUS " + context.computeOnClient(minecraft -> OutputState.statusLine()));
+		// The simulated context failure only exists on macOS. Elsewhere the job is a plain forced-HDR run.
+		boolean contextFails = Boolean.getBoolean("deepcolor.test.failGlFloatContext") && Hdr.isMacOs();
+		if (contextFails) {
+			// HDR was asked for, but the float context "failed": the game must have started anyway,
+			// on the next format, without EDR (which would show an SDR image far too dark).
+			this.check("OpenGL falls back from the float format when its context fails (now " + GlWindowFormat.requested() + ")",
+				GlWindowFormat.requested() != GlWindowFormat.Request.FLOAT);
+			this.check("the fallback output is SDR", context.computeOnClient(minecraft -> !OutputState.isScrgb()));
+		}
+		if (Boolean.getBoolean("deepcolor.test.forceScrgb") && !contextFails) {
+			this.check("forced HDR output ends up on the float surface", context.computeOnClient(minecraft -> OutputState.isScrgb()));
+		}
+		if (Hdr.isMacOs() && context.computeOnClient(minecraft -> OutputState.isOpenGl())) {
+			// Asked from the game window's own view: EDR must be on exactly when the output is HDR.
+			// Off with HDR would show a dim SDR image, on without it an image far too dark.
+			boolean edr = context.computeOnClient(minecraft -> MacEdr.isOn(minecraft.getWindow().handle()));
+			this.check("EDR on the game window matches the output (EDR " + edr + ")", edr == context.computeOnClient(minecraft -> OutputState.isScrgb()));
+		}
 		context.takeScreenshot("01_title");
 		this.checkModMenu();
 		this.checkSodiumPage(context);
