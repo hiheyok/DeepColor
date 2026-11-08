@@ -46,6 +46,7 @@ layout(location = 0) out vec4 fragColor;
 
 const float LSB_8 = 1.0 / 255.0;
 const float GRADIENT_MAX = 32.0 / 255.0;
+const float BLACK_EDGE = 0.004;
 const int BLUE_NOISE_SIZE = 64;
 
 // Interleaved gradient noise (Jimenez 2014). Cheaper than blue noise but more visible.
@@ -75,22 +76,32 @@ float triangular(float uniformValue) {
     return sign(centered) * (1.0 - sqrt(max(0.0, 1.0 - abs(centered))));
 }
 
-vec3 triangularNoise(vec2 pixel) {
+vec3 uniformNoise3(vec2 pixel) {
     // Separate offsets decorrelate the channels, so the grain stays neutral instead of colored.
     return vec3(
-        triangular(uniformNoise(pixel)),
-        triangular(uniformNoise(pixel + vec2(23.0, 41.0))),
-        triangular(uniformNoise(pixel + vec2(47.0, 11.0)))
+        uniformNoise(pixel),
+        uniformNoise(pixel + vec2(23.0, 41.0)),
+        uniformNoise(pixel + vec2(47.0, 11.0))
     );
 }
 
-// Adds noise in units of the given step. Noise fades out in the last step at either end of the range:
-// at full amplitude a pure 0 would clip on the low side and round up on the high side, turning true
-// black into a lifted, grainy floor. That is very visible on an OLED. Fading the amplitude keeps the
-// mean exact, because the noise is still symmetric around the input.
+// Adds noise in units of the given step, keeping the mean of the rounded result equal to the input.
+// Triangular noise spans two steps, so near either end of the range it would be clipped: a pure 0
+// would come out as a lifted, grainy floor, which is very visible on an OLED. So the noise never
+// reaches past the ends, at any strength:
+// - In the last step it is uniform and at most one step wide. 0 and 1 stay exact, and anything in
+//   between still averages to its true level: a quarter step above black lights a quarter of the
+//   pixels. (Fading the triangular noise out instead rounded everything below a quarter step to
+//   black and pulled the rest of the step too dark.)
+// - Above that the triangular noise is limited to the distance to the end, which only matters for
+//   strengths above 1.
 vec3 dither(vec3 color, float stepSize, float amount, vec2 pixel) {
+    vec3 u = uniformNoise3(pixel);
+    vec3 triangularNoise = vec3(triangular(u.r), triangular(u.g), triangular(u.b));
     vec3 headroom = min(color, 1.0 - color) / stepSize;
-    return color + triangularNoise(pixel) * clamp(headroom, 0.0, 1.0) * stepSize * amount;
+    vec3 lastStep = (u - 0.5) * min(amount, 1.0);
+    vec3 inside = triangularNoise * min(vec3(amount), headroom);
+    return color + mix(lastStep, inside, step(1.0, headroom)) * stepSize;
 }
 
 // Rounds to levels of stepSize and writes them as output codes that land back on the same level
@@ -218,17 +229,20 @@ vec3 hdrPattern(int strip) {
 // It goes through the same final quantization as the real image, so every strip is genuine: the
 // 8-bit strips are exactly what an 8-bit pipeline would show, also on a 10-bit output.
 vec3 gradient(int strip, vec2 pixel) {
-    vec3 ramp = vec3(texCoord.x * GRADIENT_MAX);
+    // The ramp starts with a sliver of true black, which must stay black with every setting.
+    vec3 ramp = vec3(texCoord.x < BLACK_EDGE ? 0.0 : texCoord.x * GRADIENT_MAX);
     if (strip == 0) {
         return toLevels(ramp, LSB_8);
     }
     if (strip == 1) {
+        // A plain 8-bit pipeline with standard dither, for comparison: always strength 1.
         return toLevels(dither(ramp, LSB_8, 1.0, pixel), LSB_8);
     }
     if (strip == 2) {
         return toLevels(ramp, outputLsb);
     }
-    return toLevels(dither(ramp, ditherLsb, 1.0, pixel), ditherLsb);
+    // The real dither at the configured depth and strength.
+    return toLevels(dither(ramp, ditherLsb, strength, pixel), ditherLsb);
 }
 
 void main() {

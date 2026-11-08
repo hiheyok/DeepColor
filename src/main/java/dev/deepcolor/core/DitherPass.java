@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
@@ -40,6 +41,8 @@ public final class DitherPass {
 	private static final int PUSH_CONSTANT_SIZE = 64;
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
+	/** For tests: makes every run of the pass fail, as a shader that does not compile would. */
+	private static final boolean SIMULATE_FAILURE = Boolean.getBoolean("deepcolor.test.failDither");
 	private static final BindGroupLayout SAMPLERS = BindGroupLayout.builder()
 		.withUniform("InSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("NoiseSampler", UniformType.COMBINED_IMAGE_SAMPLER)
@@ -78,7 +81,8 @@ public final class DitherPass {
 
 			frame++;
 			ensureTarget(source, outputFormat);
-			float strength = config.dither ? config.ditherStrength : 0.0F;
+			// The gradient screen always dithers its dithered strip, at the configured strength.
+			float strength = config.dither || gradientMode != 0 ? config.ditherStrength : 0.0F;
 			float offset = config.temporal ? (float) ((frame * GOLDEN_RATIO) % 1.0) : 0.0F;
 			// The shader rounds to the dither depth. Without dither there is no reason to round coarser
 			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
@@ -96,9 +100,18 @@ public final class DitherPass {
 		}
 	}
 
+	/** True once the pass has failed and switched itself off. */
+	public static boolean failed() {
+		return failed;
+	}
+
 	/**
 	 * Returns an RGBA8 copy of a target, for code that reads pixels back as RGBA8. Readbacks are
 	 * queued in order, so one reused target is safe even with several captures in a frame.
+	 *
+	 * <p>Screenshots and world icons come through here, so it follows the same rule as {@link #apply}:
+	 * a failing dither pass must never take the game down. Once the pass has failed, the copy is made
+	 * with the game's own blit, which only lacks the dither.
 	 */
 	public static RenderTarget flattenForReadback(RenderTarget target) {
 		GpuTextureView source = target.getColorTextureView();
@@ -111,9 +124,33 @@ public final class DitherPass {
 			}
 			flattened = new TextureTarget("Deep Color readback", target.width, target.height, GpuFormat.RGBA8_UNORM, null);
 		}
-		DeepColorConfig config = DeepColorConfig.get();
-		render(source, Objects.requireNonNull(flattened.getColorTextureView()), Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
-		return flattened;
+		GpuTextureView destination = Objects.requireNonNull(flattened.getColorTextureView());
+		if (!failed) {
+			try {
+				DeepColorConfig config = DeepColorConfig.get();
+				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
+				return flattened;
+			} catch (RuntimeException e) {
+				failed = true;
+				DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
+			}
+		}
+		try {
+			// The game's plain screen copy. It does not blend, so pixels with alpha below 1 keep their
+			// color, as they do in the normal conversion (RenderTarget.blitAndBlendToTexture would
+			// multiply them by alpha).
+			try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color readback copy", destination, Optional.empty())) {
+				pass.setPipeline(RenderSystem.getCompiledPipeline(RenderPipelines.TRACY_BLIT));
+				RenderSystem.bindDefaultUniforms(pass);
+				pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+				pass.draw(3, 1, 0, 0);
+			}
+			return flattened;
+		} catch (RuntimeException e) {
+			// A wrong-looking screenshot is still better than a crash.
+			DeepColor.LOGGER.error("Could not convert the image to RGBA8 for a screenshot", e);
+			return target;
+		}
 	}
 
 	private static float lsb(int bits) {
@@ -135,6 +172,9 @@ public final class DitherPass {
 	}
 
 	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode) {
+		if (SIMULATE_FAILURE) {
+			throw new IllegalStateException("Simulated dither pass failure (deepcolor.test.failDither)");
+		}
 		ensureNoise();
 		var compiled = ModPipelines.get(output.pipeline);
 		DeepColorConfig config = DeepColorConfig.get();
@@ -149,7 +189,8 @@ public final class DitherPass {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
 				constants.putFloat(lsb(output.bits));
-				constants.putFloat(output == Output.SCRGB ? 0.0F : strength);
+				// Float output is never dithered in the real image, only in the gradient screen's strip.
+				constants.putFloat(strength);
 				constants.putFloat(noiseOffset);
 				constants.putInt(mode);
 				constants.putInt(config.noisePattern == DeepColorConfig.NoisePattern.BLUE_NOISE ? 0 : 1);
