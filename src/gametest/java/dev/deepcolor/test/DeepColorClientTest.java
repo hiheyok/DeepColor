@@ -10,6 +10,7 @@ import dev.deepcolor.core.DitherPass;
 import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.GlWindowFormat;
 import dev.deepcolor.core.Hdr;
+import dev.deepcolor.core.HdrExpandPass;
 import dev.deepcolor.core.MacEdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
@@ -83,10 +84,13 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			this.check("forced HDR output ends up on the float surface", context.computeOnClient(minecraft -> OutputState.isScrgb()));
 		}
 		if (Hdr.isMacOs() && context.computeOnClient(minecraft -> OutputState.isOpenGl())) {
-			// Asked from the game window's own view: EDR must be on exactly when the output is HDR.
-			// Off with HDR would show a dim SDR image, on without it an image far too dark.
+			// Asked from the game window itself: the float (linear) encoding must be used exactly when
+			// the window reads linear light, and then EDR must be on too. A mismatch shows an image
+			// far too dark (linear values read as gamma) or washed out (the reverse).
+			boolean linear = context.computeOnClient(minecraft -> MacEdr.hasLinearColorSpace(minecraft.getWindow().handle()));
 			boolean edr = context.computeOnClient(minecraft -> MacEdr.isOn(minecraft.getWindow().handle()));
-			this.check("EDR on the game window matches the output (EDR " + edr + ")", edr == context.computeOnClient(minecraft -> OutputState.isScrgb()));
+			boolean scrgb = context.computeOnClient(minecraft -> OutputState.isScrgb());
+			this.check("game window color space matches the output (linear " + linear + ", EDR " + edr + ")", linear == scrgb && (!scrgb || edr));
 		}
 		context.takeScreenshot("01_title");
 		this.checkModMenu();
@@ -434,8 +438,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				config.hdrUiNits = 203;
 			});
 			for (boolean paused : new boolean[]{false, true}) {
+				int blursBefore = HdrExpandPass.blursKept();
 				context.setScreen(() -> paused ? new PauseScreen(true) : null);
 				context.waitTicks(5);
+				if (paused) {
+					// The pause menu must really blur and keep its world, or the gain check below would
+					// be measuring something else.
+					this.check("pause menu blurs and keeps the world behind it for HDR", HdrExpandPass.blursKept() > blursBefore);
+				}
 				String where = paused ? "pause menu" : "world";
 				for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
 					// The sky keeps brightening for a while after "time set noon" (8% of pixels change

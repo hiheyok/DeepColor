@@ -68,7 +68,21 @@ public final class OutputProbe {
 		int width = target.getWidth(0);
 		int height = target.getHeight(0);
 		GpuFormat format = target.getFormat();
-		GpuBuffer buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
+		GpuBuffer buffer = null;
+		try {
+			buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
+			copyAndAnswer(target, buffer, width, height, format, bits, callback);
+		} catch (RuntimeException e) {
+			// Setting up the readback failed: free what exists and still answer.
+			DeepColor.LOGGER.warn("Could not start reading back the dither target", e);
+			if (buffer != null) {
+				buffer.close();
+			}
+			callback.accept(null);
+		}
+	}
+
+	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback) {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;

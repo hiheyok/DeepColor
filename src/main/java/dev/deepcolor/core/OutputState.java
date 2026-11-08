@@ -48,12 +48,13 @@ public final class OutputState {
 			// ever goes through an 8- or 10-bit target, so a deeper framebuffer (12 bits) counts as 10,
 			// and anything below 10, including the 0 some drivers report or a GL error reads as, as 8.
 			bits = result.floating() ? result.bits() : result.bits() >= 10 ? 10 : 8;
-			// On macOS a float framebuffer is only HDR once the view has EDR, otherwise it stays SDR.
-			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.isOn(Minecraft.getInstance().getWindow().handle()));
+			// On macOS the float encoding is linear light, which only the window's extended linear sRGB
+			// color space reads correctly (see MacEdr). Without it the output stays plain SDR.
+			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.hasLinearColorSpace(Minecraft.getInstance().getWindow().handle()));
 			if (GlWindowFormat.requested() == GlWindowFormat.Request.FLOAT && !result.floating()) {
 				DeepColor.LOGGER.info("HDR output: the driver gave no floating-point OpenGL framebuffer, using SDR output");
 			} else if (result.floating() && !scrgb) {
-				DeepColor.LOGGER.info("HDR output: EDR is not available for the OpenGL view, using SDR output");
+				DeepColor.LOGGER.info("HDR output: the window did not take the linear color space, using SDR output");
 				// The dither pass then writes an 8-bit target, which is what the window shows.
 				bits = 8;
 			}

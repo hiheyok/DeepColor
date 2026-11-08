@@ -197,41 +197,43 @@ vec3 expandWorld(vec3 world) {
 
 // The main target holds the plain SDR image with the interface over it, and its alpha says how much
 // the interface covers each pixel (HdrExpandPass set it to 0 for the world). Normal blending gives
-// current = a * ui + (1 - a) * k * world, where k is any darkening that left alpha alone (the
-// vignette). The expanded image is the same with world replaced by its expansion, so the difference
-// is added for the share that is world.
+// current = a * ui + (1 - a) * k * world, where k is darkening that left alpha alone (the vignette).
+// The expanded image is the same with world replaced by its expansion, so the difference
+// (1 - a) * k * (expanded - world) is added.
 //
-// Alpha alone is not proof, since a mod overlay may draw without writing alpha. So where alpha says
-// pure world, the pixel must also look like it: every channel darkened by the same factor, and not
-// by much. A dark tooltip over a bright sky fails that and is left alone instead of glowing, and so
-// does an overlay that tints the world unevenly (whose highlights would otherwise change color).
+// k is measured from the pixel: current / ((1 - a) * world). It is only taken where every channel
+// gives the same ratio, which is the world darkened evenly, alone or under black translucent
+// interface (chat and menu backdrops). Interface that adds its own light changes the channels
+// unevenly; k is then taken as 1, which is exact without a vignette.
+//
+// Alpha alone is not proof, since a mod overlay may draw without writing alpha. Where alpha says
+// pure world, an uneven pixel, or one darkened by more than about half, is not trusted as world: a
+// dark tooltip over a bright sky is left alone instead of glowing. That check fades out as alpha
+// rises, so fading text and anti-aliased edges change smoothly instead of popping.
 vec3 withExpandedWorld(vec3 current, float alpha) {
     vec4 copy = texture(WorldSampler, texCoord);
     vec3 world = mix(max(copy.rgb, 0.0), vec3(0.0), notEqual(copy.rgb, copy.rgb));
     // The copy's alpha is 0 for world. Behind a blurred menu it is where interface drawn before the
     // blur was smeared into the copy; that is not world and is left as it is.
     float blurredInterface = clamp(copy.a, 0.0, 1.0);
-    float worldShare = (1.0 - clamp(alpha, 0.0, 1.0)) * (1.0 - smoothstep(0.0, 0.05, blurredInterface));
+    float coverage = clamp(alpha, 0.0, 1.0);
+    float worldShare = (1.0 - coverage) * (1.0 - smoothstep(0.0, 0.05, blurredInterface));
     vec3 shareOfWorld = world * worldShare;
     float worldLuminance = dot(shareOfWorld, LUMA);
     if (worldLuminance <= 1e-4) {
         return current;
     }
-    float darkening = 1.0;
-    float trust = 1.0;
-    if (alpha < 0.02) {
-        // Pure world by alpha. Darkening that left alpha alone (the vignette) is found by comparing
-        // with the copy, and must be the same in every channel and less than about half.
-        darkening = clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0);
-        vec3 usable = step(vec3(0.002), shareOfWorld);
-        vec3 ratio = max(current, 0.0) / max(shareOfWorld, vec3(0.002));
-        vec3 spread = abs(ratio - darkening) * usable;
-        bool even = max(spread.r, max(spread.g, spread.b)) <= 0.03 + 0.03 * darkening;
-        trust = even ? smoothstep(0.35, 0.6, darkening) : 0.0;
-    }
-    // Interface blended over the world (alpha above 0) needs no estimate: with normal blending the
-    // expanded image differs from the current one by exactly the world share times the expansion.
-    // Estimating darkening there would count the interface's own light as world.
+    float measured = clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0);
+    vec3 usable = step(vec3(0.002), shareOfWorld);
+    vec3 ratio = max(current, 0.0) / max(shareOfWorld, vec3(0.002));
+    vec3 spread = abs(ratio - measured) * usable;
+    bool even = max(spread.r, max(spread.g, spread.b)) <= 0.03 + 0.03 * measured;
+    float darkening = even ? measured : 1.0;
+    // How much a pixel that alpha calls world must look like world to be expanded. Full strictness
+    // at alpha 0, none from alpha 0.1, smoothly in between.
+    float strictness = 1.0 - smoothstep(0.0, 0.1, coverage);
+    float looksLikeWorld = even ? smoothstep(0.35, 0.6, measured) : 0.0;
+    float trust = mix(1.0, looksLikeWorld, strictness);
     return current + trust * worldShare * darkening * (expandWorld(world) - world);
 }
 
