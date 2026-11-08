@@ -230,6 +230,11 @@ switches to 8-bit noise there. Exclusive fullscreen keeps the 10 bits: F3 then e
   the RGBA8 GUI item atlas, compiles a variant the first time, which can cause a very short hitch.
 - **Other mods reading the main target directly** may assume RGBA8. The vanilla screenshot path is
   handled, anything custom is not.
+- **With HDR on, the world has alpha 0 in the main target** between the end of the world and the final
+  pass, because alpha is how Deep Color tells world from interface (issue #7 tracks a cleaner design).
+  Vanilla never reads it there, and screenshots, world icons and the menu blur are handled. A replay,
+  recording or capture mod that reads the main target's alpha in that window would see the world as
+  transparent; its colors are unaffected.
 - **rrtt217's HDR Mod:** if it is installed, Deep Color disables itself entirely and logs why.
 - If an injection fails on a future version, it is logged and the feature using it turns off. If a hook
   that upgraded targets depend on is missing, targets stay RGBA8 rather than risking a crash.

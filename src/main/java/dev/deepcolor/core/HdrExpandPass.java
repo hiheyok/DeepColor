@@ -26,6 +26,11 @@ import org.jspecify.annotations.Nullable;
  * alpha by how much it covers. The final pass then knows, per pixel, how much of it is world and
  * adds that share of the expansion. Overlays that only darken the world without touching alpha
  * (the vignette) are found by comparing with the copy, and darken the expanded world the same way.
+ *
+ * <p>Known limit of this design: until the final pass, the world has alpha 0 in the main target. Its
+ * colors are the plain SDR image, but a mod that reads the main target's alpha in that window (a
+ * replay or capture mod) sees the world as transparent. See issue #7 for drawing the interface into
+ * its own layer instead, which removes this.
  */
 public final class HdrExpandPass {
 	/** Most a gray at half brightness may gain from highlight expansion. */
@@ -61,9 +66,6 @@ public final class HdrExpandPass {
 	}
 
 	private static @Nullable Frame frame;
-	/** The settings of the frame being shown, for the final pass. */
-	private static float shownBoost;
-	private static DeepColorConfig.HdrMapping shownMapping = DeepColorConfig.HdrMapping.HIGHLIGHTS;
 	/** Counts menu blurs that kept a world to expand, for tests. */
 	private static int blursKept;
 	private static boolean failed;
@@ -82,7 +84,7 @@ public final class HdrExpandPass {
 
 	/** After the post effects, before the interface. Only reached on frames that render a world. */
 	public static void apply(RenderTarget main) {
-		frame = null;
+		// frame is already null here: frameStarted ran at the start of this frame.
 		DeepColorConfig config = DeepColorConfig.get();
 		// Without the final pass, alpha 0 would reach the window, so never mark the world then.
 		if (failed || DitherPass.failed() || config.hdrMapping == DeepColorConfig.HdrMapping.NONE || !Hdr.active()) {
@@ -117,12 +119,12 @@ public final class HdrExpandPass {
 				pass.setPipeline(ModPipelines.get(MARK_WORLD));
 				pass.draw(3, 1, 0, 0);
 			}
-			// Alpha is cleared from here on, so the frame is recorded before anything else can fail.
-			frame = new Frame(color, colorView, false, boost, config.hdrMapping);
+			// Alpha is cleared from here on, so the frame is recorded before anything else can fail. If
+			// the copy below fails, the catch makes the target opaque again and drops the frame.
+			frame = new Frame(color, colorView, true, boost, config.hdrMapping);
 			// Copied after marking, so the copy's alpha is 0 too. After a menu blur the copy is
 			// replaced and its alpha then says where interface was blurred into it (see afterBlur).
 			device.createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, width, height);
-			frame = new Frame(color, colorView, true, boost, config.hdrMapping);
 			lastUsedNanos = System.nanoTime();
 		} catch (RuntimeException e) {
 			failed = true;
@@ -158,18 +160,21 @@ public final class HdrExpandPass {
 		return blursKept;
 	}
 
+	/** What the final pass needs to expand the world of the frame being shown. */
+	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping) {
+	}
+
 	/**
-	 * The world copy, when the frame being shown has one and is shown from the main target it was
-	 * made for. Also settles the settings the final pass uses for it.
+	 * The expansion for the frame being shown, when it has a world copy and is shown from the main
+	 * target the copy was made for. The settings come with it, so nothing depends on call order.
 	 */
-	static @Nullable GpuTextureView takeWorldForFrame(GpuTextureView shown) {
+	static @Nullable Expansion expansionForFrame(GpuTextureView shown) {
 		Frame current = frame;
-		if (current == null || !current.expandable() || shown.texture() != current.target()) {
+		GpuTextureView view = worldView;
+		if (current == null || !current.expandable() || view == null || shown.texture() != current.target()) {
 			return null;
 		}
-		shownBoost = current.boost();
-		shownMapping = current.mapping();
-		return worldView;
+		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping());
 	}
 
 	/**
@@ -207,18 +212,6 @@ public final class HdrExpandPass {
 			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
 			.withColorTargetState(new ColorTargetState(Optional.empty(), format, ColorTargetState.WRITE_ALPHA))
 			.build();
-	}
-
-	static float boost() {
-		return shownBoost;
-	}
-
-	static float exponent() {
-		return highlightExponent(shownBoost);
-	}
-
-	static DeepColorConfig.HdrMapping mapping() {
-		return shownMapping;
 	}
 
 	/**

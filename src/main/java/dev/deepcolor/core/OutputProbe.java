@@ -7,6 +7,7 @@ import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import dev.deepcolor.DeepColor;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
 
@@ -68,20 +69,23 @@ public final class OutputProbe {
 		int width = target.getWidth(0);
 		int height = target.getHeight(0);
 		GpuFormat format = target.getFormat();
-		// The copy callback can run inside copyTextureToBuffer, so it owns the buffer and the answer
-		// as soon as it starts: the setup failure path below must not close or answer a second time.
-		boolean[] handedOver = new boolean[1];
+		// The buffer and the answer belong to whichever side claims them first: the copy callback
+		// (which may run inside copyTextureToBuffer, or later if the copy was queued) or the failure
+		// path below (if copyTextureToBuffer throws). The other side then does nothing, so the buffer
+		// is closed once and the caller answered once, in every order.
+		AtomicBoolean claimed = new AtomicBoolean();
 		GpuBuffer buffer = null;
 		try {
 			buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
-			copyAndAnswer(target, buffer, width, height, format, bits, callback, handedOver);
+			copyAndAnswer(target, buffer, width, height, format, bits, callback, claimed);
 		} catch (RuntimeException e) {
-			if (handedOver[0]) {
-				// Only the callback's own failure can get here, after it has answered.
+			if (!claimed.compareAndSet(false, true)) {
+				// The callback already ran and answered; only its own failure can get here.
 				DeepColor.LOGGER.warn("The dither target readback callback failed", e);
 				return;
 			}
-			// Setting up the readback failed: free what exists and still answer.
+			// Setting up the readback failed: free what exists and still answer. A copy queued
+			// before the failure finds the claim taken and leaves the buffer alone.
 			DeepColor.LOGGER.warn("Could not start reading back the dither target", e);
 			if (buffer != null) {
 				buffer.close();
@@ -90,9 +94,11 @@ public final class OutputProbe {
 		}
 	}
 
-	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback, boolean[] handedOver) {
+	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback, AtomicBoolean claimed) {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
-			handedOver[0] = true;
+			if (!claimed.compareAndSet(false, true)) {
+				return;
+			}
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;
 			// The buffer goes away whatever happens, and the callback always gets an answer.

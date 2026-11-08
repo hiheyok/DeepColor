@@ -207,18 +207,26 @@ vec3 expandWorld(vec3 world) {
 // unevenly; k is then taken as 1, which is exact without a vignette.
 //
 // Alpha alone is not proof, since a mod overlay may draw without writing alpha. Where alpha says
-// pure world, an uneven pixel, or one darkened by more than about half, is not trusted as world: a
-// dark tooltip over a bright sky is left alone instead of glowing. That check fades out as alpha
-// rises, so fading text and anti-aliased edges change smoothly instead of popping.
+// pure world, an uneven pixel, or one darkened more than the vanilla vignette can darken it at that
+// spot, is not trusted as world: a dark tooltip over a bright sky is left alone instead of glowing.
+// That check fades out as alpha rises, so fading text and anti-aliased edges change smoothly
+// instead of popping.
+//
+// The darkest the vanilla vignette can make each spot, as a fraction of the light it keeps. Its
+// texture is radial over the stretched screen; at full strength (dark places) it keeps about 18% in
+// the corners, 61% at the middle of each edge, and all of it near the centre. This fit errs on the
+// darker side, so a real vignette is always accepted.
+float vignetteKeeps(vec2 uv) {
+    float r = length(uv * 2.0 - 1.0);
+    return 1.0 - clamp((r - 0.45) * 0.9, 0.0, 0.9);
+}
+
 vec3 withExpandedWorld(vec3 current, float alpha) {
     vec4 copy = texture(WorldSampler, texCoord);
     vec3 world = mix(max(copy.rgb, 0.0), vec3(0.0), notEqual(copy.rgb, copy.rgb));
-    // The copy's alpha is 0 for world. Behind a blurred menu it is where interface drawn before the
-    // blur was smeared into the copy; that is not world and is left as it is.
-    float blurredInterface = clamp(copy.a, 0.0, 1.0);
     float coverage = clamp(alpha, 0.0, 1.0);
-    float worldShare = (1.0 - coverage) * (1.0 - smoothstep(0.0, 0.05, blurredInterface));
-    vec3 shareOfWorld = world * worldShare;
+    // The blend equation: current = a * ui + (1 - a) * k * world. Darkening k is measured against it.
+    vec3 shareOfWorld = world * (1.0 - coverage);
     float worldLuminance = dot(shareOfWorld, LUMA);
     if (worldLuminance <= 1e-4) {
         return current;
@@ -230,11 +238,17 @@ vec3 withExpandedWorld(vec3 current, float alpha) {
     bool even = max(spread.r, max(spread.g, spread.b)) <= 0.03 + 0.03 * measured;
     float darkening = even ? measured : 1.0;
     // How much a pixel that alpha calls world must look like world to be expanded. Full strictness
-    // at alpha 0, none from alpha 0.1, smoothly in between.
+    // at alpha 0, none from alpha 0.1, smoothly in between. Fully trusted down to what the vignette
+    // can leave at this spot (never stricter than 60%), fading out a little below that.
     float strictness = 1.0 - smoothstep(0.0, 0.1, coverage);
-    float looksLikeWorld = even ? smoothstep(0.35, 0.6, measured) : 0.0;
+    float trustedFrom = min(0.6, vignetteKeeps(texCoord));
+    float looksLikeWorld = even ? smoothstep(trustedFrom * 0.58, trustedFrom, measured) : 0.0;
     float trust = mix(1.0, looksLikeWorld, strictness);
-    return current + trust * worldShare * darkening * (expandWorld(world) - world);
+    // The copy's alpha is 0 for world. Behind a blurred menu it is where interface drawn before the
+    // blur was smeared into the copy; that part is not world and is not expanded. It only weights
+    // what is added, so the darkening measured above stays exact.
+    float blurredWorld = 1.0 - smoothstep(0.0, 0.05, clamp(copy.a, 0.0, 1.0));
+    return current + trust * blurredWorld * (1.0 - coverage) * darkening * (expandWorld(world) - world);
 }
 
 vec3 stretchGamut(vec3 light) {

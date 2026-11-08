@@ -123,6 +123,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				world.getConnection().waitForClientboundPackets();
 				context.waitTicks(10);
 				this.checkWorldHdr(context);
+				this.checkVignetteHdr(context);
 				this.checkHdrScreenshots(context);
 			}
 
@@ -445,13 +446,13 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				config.hdrUiNits = 203;
 			});
 			for (boolean paused : new boolean[]{false, true}) {
-				int blursBefore = HdrExpandPass.blursKept();
+				int blursBefore = context.computeOnClient(minecraft -> HdrExpandPass.blursKept());
 				context.setScreen(() -> paused ? new PauseScreen(true) : null);
 				context.waitTicks(5);
 				if (paused) {
 					// The pause menu must really blur and keep its world, or the gain check below would
 					// be measuring something else.
-					this.check("pause menu blurs and keeps the world behind it for HDR", HdrExpandPass.blursKept() > blursBefore);
+					this.check("pause menu blurs and keeps the world behind it for HDR", context.computeOnClient(minecraft -> HdrExpandPass.blursKept()) > blursBefore);
 				}
 				String where = paused ? "pause menu" : "world";
 				for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
@@ -601,6 +602,62 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		// Midtones: the expansion gain at half luminance is capped at 15%.
 		double gainAtHalf = 1.0 + (peak / ui - 1.0) * Math.pow(0.5, Math.max(4.0, Math.log((peak / ui - 1.0) / 0.15) / Math.log(2.0)));
 		this.check(String.format(Locale.ROOT, "midtone gain stays at 15%% (%.3f)", gainAtHalf), Math.abs(gainAtHalf - 1.15) < 0.005 || gainAtHalf < 1.15);
+	}
+
+	/**
+	 * The vanilla vignette at full strength (as in a dark cave) keeps only about 18% of the light in
+	 * the corners. That darkening is even and must not be mistaken for a mod overlay: the corners get
+	 * the same Linear gain as the rest of the world. Only the top corners are used, away from the
+	 * hotbar and chat.
+	 */
+	private void checkVignetteHdr(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		boolean vignette = context.computeOnClient(minecraft -> minecraft.options.vignette().get());
+		float brightness = context.computeOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness);
+		try {
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(true));
+			double none = this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			double linear = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			float expected = context.computeOnClient(minecraft -> Hdr.peakNits() / Hdr.uiNits());
+			double gain = linear / none;
+			this.check(String.format(Locale.ROOT, "corners under a full-strength vignette keep the Linear gain (%.2f of %.2f)", gain, expected),
+				gain > expected * 0.9 && gain < expected * 1.05);
+		} finally {
+			context.runOnClient(minecraft -> {
+				minecraft.options.vignette().set(vignette);
+				config.hdrMapping = mapping;
+				// Back where it was, or it would fade back during the screenshot comparisons that follow.
+				minecraft.gui.hud.vignetteBrightness = brightness;
+			});
+		}
+	}
+
+	/** Mean brightness of the outer 1/8 of the two top corners, with the vignette pinned at full strength. */
+	private double cornerMean(ClientGameTestContext context, DeepColorConfig config, DeepColorConfig.HdrMapping mapping) {
+		context.runOnClient(minecraft -> {
+			config.hdrMapping = mapping;
+			// Moves 1% per tick toward the light level, so it stays near full over the few ticks below.
+			minecraft.gui.hud.vignetteBrightness = 1.0F;
+		});
+		context.waitTicks(3);
+		context.runOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness = 1.0F);
+		OutputProbe.Capture capture = capture(context, OutputProbe::captureDitherTarget);
+		int w = capture.width() / 8;
+		int h = capture.height() / 8;
+		double sum = 0.0;
+		int count = 0;
+		// Row 0 of a capture is the bottom of the screen.
+		for (int y = capture.height() - h; y < capture.height(); y++) {
+			for (int x = 0; x < w; x++) {
+				sum += capture.value(x, y) + capture.value(capture.width() - 1 - x, y);
+				count += 2;
+			}
+		}
+		return sum / count;
 	}
 
 	private double[] worldStats(ClientGameTestContext context, DeepColorConfig config, DeepColorConfig.HdrMapping mapping) {
@@ -762,7 +819,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			OutputProbe.Capture full = capture(context, OutputProbe::captureDitherTarget);
 			this.log("full-screen strip " + strip + ": " + distinctInRow(full, full.height() / 2) + " distinct codes");
 			if (strip == 3) {
+				// Averaged over frames: at 10 bits the darkest levels span only a few pixel columns,
+				// and one frame's noise alone would move the mean by about the limit.
 				double darkBias = darkEndBias(full, ditherBits);
+				for (int i = 0; i < 2; i++) {
+					context.waitTicks(1);
+					darkBias += darkEndBias(capture(context, OutputProbe::captureDitherTarget), ditherBits);
+				}
+				darkBias /= 3.0;
 				this.check(String.format(Locale.ROOT, "dither keeps the darkest shades at their true level (%+.3f LSB)", darkBias), Math.abs(darkBias) < 0.03);
 			}
 		}
@@ -886,9 +950,11 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		double bias = 0.0;
 		int counted = 0;
 		// The ramp starts with a sliver of true black (BLACK_EDGE in dither.fsh), which is left out.
+		// The first two levels: the last step before black, where the noise changes shape, and the
+		// one above it, which gives the 10-bit ramp enough columns for a steady mean.
 		for (int x = (int) Math.ceil(capture.width() * 0.004) + 1; ; x++) {
 			double ideal = (x + 0.5) / capture.width() * 32.0 / 255.0 * levels;
-			if (ideal >= 1.0) {
+			if (ideal >= 2.0) {
 				break;
 			}
 			double sum = 0.0;

@@ -110,11 +110,11 @@ public final class DitherPass {
 			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
 			// screen keeps the dither depth: its dithered strip always dithers, to show what it does.
 			int quantizeBits = config.dither || gradientMode != 0 ? OutputState.ditherBits() : bits;
-			// The world to expand into HDR highlights, when this frame has one. Taken every frame, so
+			// The world to expand into HDR highlights, when this frame has one. Asked every frame, so
 			// it never carries over to frames without a world.
-			GpuTextureView world = HdrExpandPass.takeWorldForFrame(source);
+			HdrExpandPass.Expansion expansion = HdrExpandPass.expansionForFrame(source);
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
-				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? world : null);
+				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? expansion : null);
 			lastPresented = target;
 			return Objects.requireNonNull(targetView);
 		} catch (RuntimeException e) {
@@ -204,7 +204,7 @@ public final class DitherPass {
 	}
 
 	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode,
-		@Nullable GpuTextureView world) {
+		HdrExpandPass.@Nullable Expansion expansion) {
 		if (SIMULATE_FAILURE) {
 			throw new IllegalStateException("Simulated dither pass failure (deepcolor.test.failDither)");
 		}
@@ -218,9 +218,9 @@ public final class DitherPass {
 			var nearest = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
 			pass.setUniform("InSampler", source, nearest);
 			pass.setUniform("NoiseSampler", Objects.requireNonNull(noiseView), nearest);
-			boolean expand = world != null && hdrActive;
+			HdrExpandPass.Expansion expand = hdrActive ? expansion : null;
 			// Every sampler must be bound; the noise stands in when there is no world to expand.
-			pass.setUniform("WorldSampler", expand ? world : noiseView, nearest);
+			pass.setUniform("WorldSampler", expand != null ? expand.world() : noiseView, nearest);
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
@@ -239,9 +239,9 @@ public final class DitherPass {
 				constants.putFloat(hdrActive ? config.hdrGamutStretch : 0.0F);
 				constants.putInt(config.hdrGamutTarget.ordinal());
 				constants.putFloat(Hdr.unitNits());
-				constants.putFloat(expand ? HdrExpandPass.boost() : 0.0F);
-				constants.putFloat(expand ? HdrExpandPass.exponent() : 0.0F);
-				constants.putInt(!expand ? 0 : HdrExpandPass.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
+				constants.putFloat(expand != null ? expand.boost() : 0.0F);
+				constants.putFloat(expand != null ? expand.exponent() : 0.0F);
+				constants.putInt(expand == null ? 0 : expand.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

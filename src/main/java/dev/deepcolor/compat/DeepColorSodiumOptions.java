@@ -136,43 +136,36 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 	 * (203, the BT.2408 reference white) so that "reset to default" gives exactly the default.
 	 */
 	private static net.caffeinemc.mods.sodium.api.config.structure.IntegerOptionBuilder uiNitsOption(ConfigBuilder builder, DeepColorConfig config) {
-		int[] steps = uiNitsSteps();
-		int defaultIndex = java.util.Arrays.binarySearch(steps, new DeepColorConfig().hdrUiNits);
+		float[] steps = uiNitsSteps();
+		int defaultIndex = nearestStep(steps, DeepColorConfig.DEFAULT_UI_NITS);
 		return builder.createIntegerOption(id("hdr_ui_nits"))
 			.setName(Component.translatable("deepcolor.option.hdr_ui_nits"))
 			.setTooltip(Component.translatable("deepcolor.option.hdr_ui_nits.tooltip"))
 			.setRange(0, steps.length - 1, 1)
-			.setValueFormatter(index -> index == 0 ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", steps[index]))
+			.setValueFormatter(index -> index == 0 ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", (int) steps[index]))
 			.setDefaultValue(defaultIndex)
-			.setBinding(index -> config.hdrUiNits = steps[index], () -> nearestStep(steps, config.hdrUiNits))
+			.setBinding(index -> config.hdrUiNits = (int) steps[index], () -> nearestStep(steps, config.hdrUiNits))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 			.setStorageHandler(config::save);
 	}
 
-	/** 0 (Auto), then MIN_UI_NITS to MAX_UI_NITS in steps of 10, with the config default added in order. */
-	static int[] uiNitsSteps() {
-		int defaultNits = new DeepColorConfig().hdrUiNits;
+	/**
+	 * 0 (Auto), then MIN_UI_NITS to MAX_UI_NITS in steps of 10, with the default added in order. The
+	 * config never holds a value between 0 and MIN_UI_NITS, so only 0 itself lands on Auto.
+	 */
+	private static float[] uiNitsSteps() {
 		java.util.TreeSet<Integer> values = new java.util.TreeSet<>();
 		values.add(0);
 		for (int nits = DeepColorConfig.MIN_UI_NITS; nits <= DeepColorConfig.MAX_UI_NITS; nits += 10) {
 			values.add(nits);
 		}
-		values.add(defaultNits);
-		return values.stream().mapToInt(Integer::intValue).toArray();
-	}
-
-	/** The nearest position; 0 (Auto) only for the value 0 itself. */
-	private static int nearestStep(int[] steps, int value) {
-		if (value == 0) {
-			return 0;
+		values.add(DeepColorConfig.DEFAULT_UI_NITS);
+		float[] steps = new float[values.size()];
+		int i = 0;
+		for (int nits : values) {
+			steps[i++] = nits;
 		}
-		int best = 1;
-		for (int i = 2; i < steps.length; i++) {
-			if (Math.abs(steps[i] - value) < Math.abs(steps[best] - value)) {
-				best = i;
-			}
-		}
-		return best;
+		return steps;
 	}
 
 	private static int nearestStep(float[] steps, float value) {
