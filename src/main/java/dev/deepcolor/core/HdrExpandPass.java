@@ -24,7 +24,8 @@ import org.jspecify.annotations.Nullable;
  * <p>Runs once the world is finished and before the interface is drawn: it keeps a copy of the world
  * and sets the main target's alpha to 0. Interface drawn afterwards blends over the world and raises
  * alpha by how much it covers. The final pass then knows, per pixel, how much of it is world and
- * adds that share of the expansion. Overlays that only darken the world without touching alpha
+ * adds that share of the expansion. Additive nausea preserves coverage alpha and is flagged so
+ * its colored light is not mistaken for an untracked interface. Overlays that only darken the world without touching alpha
  * (the vignette) are found by comparing with the copy, and darken the expanded world the same way.
  *
  * <p>Known limit of this design: until the final pass, the world has alpha 0 in the main target. Its
@@ -69,6 +70,7 @@ public final class HdrExpandPass {
 	/** Counts menu blurs that kept a world to expand, for tests. */
 	private static int blursKept;
 	private static boolean failed;
+	private static boolean additiveOverlay;
 	private static boolean warnedFormat;
 
 	private HdrExpandPass() {
@@ -77,8 +79,16 @@ public final class HdrExpandPass {
 	/** At the start of every frame, with or without a world. */
 	public static void frameStarted() {
 		frame = null;
+		additiveOverlay = false;
 		if (world != null && System.nanoTime() - lastUsedNanos > FREE_AFTER_NANOS) {
 			close();
+		}
+	}
+
+	/** Called when the full-screen additive nausea pipeline is bound after marking the world. */
+	public static void additiveOverlayDrawn() {
+		if (frame != null) {
+			additiveOverlay = true;
 		}
 	}
 
@@ -148,6 +158,7 @@ public final class HdrExpandPass {
 		}
 		try {
 			RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, color.getWidth(0), color.getHeight(0));
+			additiveOverlay = false;
 			blursKept++;
 		} catch (RuntimeException e) {
 			frame = current.withoutExpansion();
@@ -161,7 +172,7 @@ public final class HdrExpandPass {
 	}
 
 	/** What the final pass needs to expand the world of the frame being shown. */
-	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping) {
+	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping, boolean additiveOverlay) {
 	}
 
 	/**
@@ -174,7 +185,7 @@ public final class HdrExpandPass {
 		if (current == null || !current.expandable() || view == null || shown.texture() != current.target()) {
 			return null;
 		}
-		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping());
+		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping(), additiveOverlay);
 	}
 
 	/**

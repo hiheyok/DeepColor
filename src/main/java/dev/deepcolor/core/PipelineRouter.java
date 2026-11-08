@@ -43,6 +43,8 @@ import org.jspecify.annotations.Nullable;
  * point replaces its per-call-site upgrades, including the Sodium-specific mixin.
  */
 public final class PipelineRouter {
+	private static final String NAUSEA_OVERLAY = "minecraft:pipeline/gui_nausea_overlay";
+
 	private record Source(RenderPipeline pipeline, ShaderSource shaderSource) {
 	}
 
@@ -83,6 +85,16 @@ public final class PipelineRouter {
 		return changed ? withFormats(pipeline, formats) : pipeline;
 	}
 
+	/** Additive nausea adds light, but never covers the world or interface already underneath. */
+	public static RenderPipeline preserveOverlayCoverage(RenderPipeline pipeline) {
+		if (!pipeline.getLocation().toString().equals(NAUSEA_OVERLAY)) {
+			return pipeline;
+		}
+		GpuFormat[] formats = pipeline.getColorTargetStates().stream()
+			.map(state -> state == null ? null : state.format()).toArray(GpuFormat[]::new);
+		return withFormats(pipeline, formats);
+	}
+
 	/** Remembers how a compiled pipeline was built so that variants of it can be compiled later. */
 	public static void remember(CompiledRenderPipeline compiled, RenderPipeline source, ShaderSource shaderSource) {
 		if (!COMPILING_EXACT.get()) {
@@ -95,7 +107,8 @@ public final class PipelineRouter {
 		ColorTargetState[] replaced = new ColorTargetState[states.size()];
 		for (int i = 0; i < replaced.length; i++) {
 			ColorTargetState state = states.get(i);
-			replaced[i] = state == null || formats[i] == null ? state : new ColorTargetState(state.blendFunction(), formats[i], state.writeMask());
+			replaced[i] = state == null || formats[i] == null ? state : new ColorTargetState(state.blendFunction(), formats[i],
+				pipeline.getLocation().toString().equals(NAUSEA_OVERLAY) ? state.writeMask() & ~ColorTargetState.WRITE_ALPHA : state.writeMask());
 		}
 		return RenderPipelineInvoker.deepcolor$create(
 			pipeline.getLocation(),
@@ -117,6 +130,9 @@ public final class PipelineRouter {
 	public static CompiledRenderPipeline route(CompiledRenderPipeline pipeline, List<RenderPassDescriptor.@Nullable Attachment<Optional<Vector4fc>>> attachments) {
 		if (!(pipeline instanceof FrontendRenderPipeline frontend) || frontend.colorTargetStates().size() != attachments.size()) {
 			return pipeline;
+		}
+		if (frontend.name().equals(NAUSEA_OVERLAY)) {
+			HdrExpandPass.additiveOverlayDrawn();
 		}
 		if (matches(frontend, attachments)) {
 			return pipeline;

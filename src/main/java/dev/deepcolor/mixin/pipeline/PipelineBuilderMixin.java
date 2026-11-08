@@ -17,7 +17,8 @@ import org.spongepowered.asm.mixin.Shadow;
 
 /**
  * Every pipeline in the game, from any mod, is compiled here. On Vulkan the color format is baked
- * in, so this is where RGBA8 becomes the internal format. OpenGL does not need any of this.
+ * in, so this is where RGBA8 becomes the internal format. Both backends preserve coverage alpha
+ * for additive nausea.
  */
 @Mixin(PipelineBuilder.class)
 abstract class PipelineBuilderMixin {
@@ -29,13 +30,14 @@ abstract class PipelineBuilderMixin {
 	private CompletableFuture<CompiledRenderPipeline.Pending> deepcolor$compilePipeline(
 		RenderPipeline pipeline, ShaderSource shaderSource, Executor executor, Operation<CompletableFuture<CompiledRenderPipeline.Pending>> original
 	) {
+		RenderPipeline prepared = PipelineRouter.preserveOverlayCoverage(pipeline);
 		if (!(this.backendDevice instanceof VulkanDevice)) {
-			return original.call(pipeline, shaderSource, executor);
+			return original.call(prepared, shaderSource, executor);
 		}
-		return original.call(PipelineRouter.upgradeForCompile(pipeline), shaderSource, executor).thenApply(pending -> () -> {
+		return original.call(PipelineRouter.upgradeForCompile(prepared), shaderSource, executor).thenApply(pending -> () -> {
 			CompiledRenderPipeline compiled = pending.finishCompile();
 			if (compiled != null) {
-				PipelineRouter.remember(compiled, pipeline, shaderSource);
+				PipelineRouter.remember(compiled, prepared, shaderSource);
 			}
 			return compiled;
 		});

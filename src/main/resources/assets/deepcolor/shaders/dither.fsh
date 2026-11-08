@@ -25,6 +25,7 @@ layout(push_constant) uniform DeepColorParams {
     float expandBoost;
     float expandExponent;
     int expandMode;
+    int additiveOverlay;
 };
 #else
 uniform float ditherLsb;
@@ -45,6 +46,7 @@ uniform float unitNits;
 uniform float expandBoost;
 uniform float expandExponent;
 uniform int expandMode;
+uniform int additiveOverlay;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -240,7 +242,9 @@ vec3 withExpandedWorld(vec3 current, float alpha) {
     // How much a pixel that alpha calls world must look like world to be expanded. Full strictness
     // at alpha 0, none from alpha 0.1, smoothly in between. Fully trusted down to what the vignette
     // can leave at this spot (never stricter than 60%), fading out a little below that.
-    float strictness = 1.0 - smoothstep(0.0, 0.1, coverage);
+    // Nausea preserves coverage alpha, but adds colored light, so its pixels need not
+    // look like evenly darkened world. Ordinary alpha-blended UI still masks expansion.
+    float strictness = additiveOverlay == 1 ? 0.0 : 1.0 - smoothstep(0.0, 0.1, coverage);
     float trustedFrom = min(0.6, vignetteKeeps(texCoord));
     float looksLikeWorld = even ? smoothstep(trustedFrom * 0.58, trustedFrom, measured) : 0.0;
     float trust = mix(1.0, looksLikeWorld, strictness);

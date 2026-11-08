@@ -124,6 +124,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				context.waitTicks(10);
 				this.checkWorldHdr(context);
 				this.checkVignetteHdr(context);
+				this.checkNauseaHdr(context, world);
 				this.checkHdrScreenshots(context);
 			}
 
@@ -632,6 +633,55 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				config.hdrMapping = mapping;
 				// Back where it was, or it would fade back during the screenshot comparisons that follow.
 				minecraft.gui.hud.vignetteBrightness = brightness;
+			});
+		}
+	}
+
+	/** Real nausea at reduced Distortion Effects must add light without removing world expansion. */
+	private void checkNauseaHdr(ClientGameTestContext context, TestSingleplayerContext world) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		double distortion = context.computeOnClient(minecraft -> minecraft.options.screenEffectScale().get());
+		boolean vignette = context.computeOnClient(minecraft -> minecraft.options.vignette().get());
+		try {
+			context.runOnClient(minecraft -> {
+				minecraft.options.screenEffectScale().set(0.0);
+				minecraft.options.vignette().set(false);
+			});
+			world.getServer().runCommand("effect give @p minecraft:nausea 30 0 true");
+			world.getConnection().waitForClientboundPackets();
+			context.waitTicks(60);
+			this.check("nausea regression exercises the real status effect",
+				context.computeOnClient(minecraft -> minecraft.player.hasEffect(net.minecraft.world.effect.MobEffects.NAUSEA)));
+			double[] none = this.worldStats(context, config, DeepColorConfig.HdrMapping.NONE);
+			double[] linear = this.worldStats(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			double expected = context.computeOnClient(minecraft -> Hdr.peakNits() / Hdr.uiNits());
+			double gain = linear[0] / none[0];
+			// Additive texture light stays at interface brightness, so the total gain can be
+			// slightly below peak/UI. The centre of the nausea texture is nearly black.
+			this.check(String.format(Locale.ROOT, "nausea at 0%% Distortion Effects retains world expansion (%.2fx of %.2fx)", gain, expected),
+				gain > expected * 0.85 && gain < expected * 1.05);
+			context.takeScreenshot("03d_hdr_nausea");
+			context.setScreen(BlackAndWhiteScreen::new);
+			context.waitTicks(3);
+			OutputProbe.Capture ui = capture(context, OutputProbe::captureDitherTarget);
+			double white = context.computeOnClient(minecraft -> Hdr.uiNits() / Hdr.unitNits());
+			this.check("opaque interface over nausea stays at interface brightness",
+				Math.abs(ui.value(ui.width() * 3 / 4, ui.height() / 2) / white - 1.0) < 0.01
+					&& ui.value(ui.width() / 4, ui.height() / 2) == 0.0F);
+			context.setScreen(() -> null);
+		} finally {
+			context.setScreen(() -> null);
+			world.getServer().runCommand("effect clear @p minecraft:nausea");
+			world.getConnection().waitForClientboundPackets();
+			context.waitTicks(30);
+			context.runOnClient(minecraft -> {
+				minecraft.options.screenEffectScale().set(distortion);
+				minecraft.options.vignette().set(vignette);
+				config.hdrMapping = mapping;
 			});
 		}
 	}

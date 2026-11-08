@@ -242,6 +242,7 @@ public final class DitherPass {
 				constants.putFloat(expand != null ? expand.boost() : 0.0F);
 				constants.putFloat(expand != null ? expand.exponent() : 0.0F);
 				constants.putInt(expand == null ? 0 : expand.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
+				constants.putInt(expand != null && expand.additiveOverlay() ? 1 : 0);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}
