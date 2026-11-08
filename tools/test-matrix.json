@@ -151,6 +151,16 @@
 			}
 		},
 		{
+			"name": "gl-hdr-ctxfail",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true",
+				"-Ddeepcolor.test.failGlFloatContext=true"
+			]
+		},
+		{
 			"name": "gl-strength2",
 			"backend": "opengl",
 			"mods": "vanilla",
