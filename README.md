@@ -125,6 +125,9 @@ What it does:
 | `hdrMapping` | `highlights`, `linear`, `none` | `highlights` |
 | `hdrGamma` | `1.8` to `3.0`, or `0` for the sRGB curve Windows uses | `2.2` |
 | `hdrShadowFloor` | `0` (off) to `0.2` nits | `0` |
+| `hdrShadowContrast` | `0` (off) to `0.95` (95% near-black reduction) | `0` |
+| `hdrShadowContrastRange` | `0.1` to `20` nominal nits | `2` |
+| `hdrShadowDither` | `0` (off) to `8` nominal 10-bit PQ steps | `0` |
 | `hdrGamutStretch` | `0` (accurate sRGB) to `1` (fully stretched to the target) | `0` |
 | `hdrGamutTarget` | `p3`, `adobe`, `bt2020` | `p3` |
 
@@ -158,6 +161,28 @@ darkest shades. Set `hdrShadowFloor` to about the dimmest patch you can still se
 darkest shadows to that level (applied to luminance, so colors keep their hue); true black stays
 black, and anything well above the floor gains only the floor itself.
 
+**Milky HDR shadows.** Optional **Near-black contrast** darkens only tones below **Contrast range**,
+with a smooth transition back to the original brightness at that limit. Find it in Mod Menu under
+**HDR shadows...**, or on Sodium's HDR page. Start with **50%** and **2 nits**, then adjust the
+strength and range separately while looking at a dark scene. Higher strength darkens the lowest
+tones more; a higher range affects more of the shadows. Both apply immediately. The strength UI
+runs from Off to 95% in steps of 5%; the range UI offers 0.1, 0.2, 0.5, 1, 2, 5, 10 and 20 nits.
+Valid custom config values between those positions are kept until a slider is moved.
+
+This is adjustable display compensation, not a measured correction profile for the AW2725DF.
+It preserves true black and hue, keeps the curve monotonic without a hard black cutoff, and leaves
+all tones at or above the selected range unchanged. Strong correction can still hide shadow detail
+on the display. It affects the final Minecraft image, including dark menus, and cannot change
+YouTube, other applications, or a panel's physical black level. Like the other nits settings, its
+range is absolute on Windows and relative to display brightness on macOS.
+
+The correction runs after HDR mapping and **Shadow floor**, before **HDR shadow noise**. Shadow
+floor lifts shadows, so leave it off initially when tuning contrast. Contrast works independently
+of Dithering and has no effect with HDR inactive. The game-shadow strip of `/deepcolor gradient`
+previews both contrast and noise; the reference ramps, fixed-nit patches and grey chart bypass
+these two controls. SDR screenshots remain unchanged. Setting contrast to Off restores the
+previous output exactly.
+
 The peak Windows reports comes from the Windows HDR Calibration app or the monitor itself. On the
 AW2725DF it reports 1000 nits.
 
@@ -173,7 +198,7 @@ Notes:
   but the output stays linear scRGB. Symmetric linear-light noise preserves average brightness and
   hue, keeps true black black, and fades out from 1 to 10 nits. It follows **Noise pattern** and
   **Animate noise**, requires **Dithering** and active HDR, and applies immediately. Available in
-  Mod Menu and Sodium's HDR page. The game-shadow gradient strip previews it; reference ramps,
+  Mod Menu under **HDR shadows...** and Sodium's HDR page. The game-shadow gradient strip previews it; reference ramps,
   patches, grey steps and SDR screenshots stay exact. It masks bands; it cannot restore detail
   already lost upstream or guarantee how a particular panel processes near-black levels.
 - Turning Windows HDR off while playing switches to a plain SDR image on the next frame. Turning it on

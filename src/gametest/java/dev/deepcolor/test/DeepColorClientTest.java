@@ -16,6 +16,7 @@ import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
 import dev.deepcolor.core.PipelineRouter;
 import dev.deepcolor.gui.DeepColorConfigScreen;
+import dev.deepcolor.gui.DeepColorHdrShadowsScreen;
 import dev.deepcolor.gui.GradientScreen;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -106,6 +107,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		this.checkGradient(context);
 		this.checkEndpoints(context);
 		this.checkHdrShadowNoise(context);
+		this.checkHdrShadowContrast(context);
 		this.checkScreenshotColor(context);
 		this.checkReloadReleasesPipelines(context);
 
@@ -157,6 +159,12 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			int footer = context.computeOnClient(minecraft -> DeepColorConfigScreen.footerY(minecraft.gui.screen().height));
 			this.log("config screen: lowest widget ends at " + lowestWidget + ", restart notice starts at " + footer);
 			this.check("config screen buttons stay clear of the restart notice", lowestWidget > 0 && lowestWidget <= footer);
+			context.setScreen(() -> new DeepColorHdrShadowsScreen(new DeepColorConfigScreen(null)));
+			context.waitTicks(3);
+			context.takeScreenshot("06b_hdr_shadows");
+			this.check("HDR shadow settings fit on screen", context.computeOnClient(minecraft -> minecraft.gui.screen().children().stream()
+				.filter(child -> child instanceof AbstractWidget)
+				.allMatch(child -> ((AbstractWidget) child).getY() >= 24 && ((AbstractWidget) child).getBottom() <= minecraft.gui.screen().height - 8)));
 			context.setScreen(() -> null);
 
 			context.getInput().pressKey(InputConstants.KEY_F3);
@@ -227,11 +235,15 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		int peakNits = config.hdrPeakNits;
 		float gamma = config.hdrGamma;
 		float gamut = config.hdrGamutStretch;
+		float contrast = config.hdrShadowContrast;
+		float contrastRange = config.hdrShadowContrastRange;
 		context.runOnClient(minecraft -> {
 			config.hdrUiNits = 123;
 			config.hdrPeakNits = 333;
 			config.hdrGamma = 2.23F;
 			config.hdrGamutStretch = 0.33F;
+			config.hdrShadowContrast = 0.33F;
+			config.hdrShadowContrastRange = 3.3F;
 		});
 		context.setScreen(() -> {
 			try {
@@ -247,11 +259,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		String kept = context.computeOnClient(minecraft -> String.format(Locale.ROOT, "UI %d, peak %d, gamma %.2f, gamut %.2f",
 			config.hdrUiNits, config.hdrPeakNits, config.hdrGamma, config.hdrGamutStretch));
 		this.check("Sodium page keeps HDR values between slider steps (" + kept + ")", kept.equals("UI 123, peak 333, gamma 2.23, gamut 0.33"));
+		this.check("Sodium keeps custom shadow contrast and range", config.hdrShadowContrast == 0.33F && config.hdrShadowContrastRange == 3.3F);
 		context.runOnClient(minecraft -> {
 			config.hdrUiNits = uiNits;
 			config.hdrPeakNits = peakNits;
 			config.hdrGamma = gamma;
 			config.hdrGamutStretch = gamut;
+			config.hdrShadowContrast = contrast;
+			config.hdrShadowContrastRange = contrastRange;
 			config.save();
 		});
 	}
@@ -386,6 +401,124 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			});
 			context.setScreen(TitleScreen::new);
 			context.waitTicks(3);
+		}
+	}
+
+	/** Exercise the actual presentation shader, including FP16 rounding and inactive-HDR gating. */
+	private void checkHdrShadowContrast(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> OutputState.isScrgb())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		float savedContrast = config.hdrShadowContrast;
+		float savedRange = config.hdrShadowContrastRange;
+		float savedFloor = config.hdrShadowFloor;
+		float savedGamma = config.hdrGamma;
+		int savedUi = config.hdrUiNits;
+		boolean savedDither = config.dither;
+		try {
+			context.runOnClient(minecraft -> {
+				config.hdrShadowContrast = 0;
+				config.hdrShadowFloor = 0;
+				config.hdrGamma = 2.2F;
+				config.hdrUiNits = 203;
+				config.dither = false;
+			});
+			context.setScreen(ShadowContrastScreen::new);
+			context.waitTicks(3);
+			OutputProbe.Capture plain = capture(context, OutputProbe::captureDitherTarget);
+			BufferedImage screenshotBefore = screenshot(context, "contrast_off");
+			boolean active = context.computeOnClient(minecraft -> Hdr.active());
+			for (float range : new float[] {0.1F, 2.0F, 20.0F}) {
+				double previousShadow = Double.POSITIVE_INFINITY;
+				for (float amount : new float[] {0.25F, 0.5F, 0.95F}) {
+					context.runOnClient(minecraft -> {
+						config.hdrShadowContrast = amount;
+						config.hdrShadowContrastRange = range;
+					});
+					context.waitTicks(3);
+					OutputProbe.Capture corrected = capture(context, OutputProbe::captureDitherTarget);
+					boolean matches = true, ordered = true, endpoints = true, untouched = true;
+					double previous = -1;
+					for (int patch = 0; patch < ShadowContrastScreen.CODES.length; patch++) {
+						int x = (int) ((patch + 0.5) * corrected.width() / ShadowContrastScreen.CODES.length);
+						int y = corrected.height() / 2;
+						double before = plain.value(x, y);
+						double after = corrected.value(x, y);
+						double nits = before * Hdr.unitNits();
+						double t = Math.clamp(nits / range, 0.0, 1.0);
+						double expected = active ? before * (1.0 - amount * (1.0 - t * t * (3.0 - 2.0 * t))) : before;
+						matches &= Double.isFinite(after) && Math.abs(after - expected) <= 1.2e-7 + expected * 0.003;
+						ordered &= after >= previous && (before == 0 || after > 0);
+						if (patch == 0 || patch == ShadowContrastScreen.CODES.length - 1) {
+							endpoints &= before == after;
+						}
+						if (!active || nits >= range) {
+							untouched &= before == after;
+						}
+						previous = after;
+					}
+					String label = String.format(Locale.ROOT, "contrast %.0f%% below %.1f nits", amount * 100, range);
+					this.check(label + " follows the smooth luminance curve", matches);
+					this.check(label + " keeps the ramp ordered with no black cutoff", ordered);
+					this.check(label + " preserves exact black and white", endpoints);
+					this.check(label + " leaves brighter tones and inactive HDR unchanged", untouched);
+					int shadowX = (int) (5.5 * corrected.width() / ShadowContrastScreen.CODES.length);
+					double shadow = corrected.value(shadowX, corrected.height() / 2);
+					if (active && previousShadow != Double.POSITIVE_INFINITY) {
+						this.check(label + " darkens more at higher strength", shadow < previousShadow);
+					}
+					previousShadow = shadow;
+				}
+			}
+			BufferedImage screenshotAfter = screenshot(context, "contrast_on");
+			this.check("HDR shadow contrast never changes SDR screenshots", Arrays.equals(
+				screenshotBefore.getRGB(0, 0, screenshotBefore.getWidth(), screenshotBefore.getHeight(), null, 0, screenshotBefore.getWidth()),
+				screenshotAfter.getRGB(0, 0, screenshotAfter.getWidth(), screenshotAfter.getHeight(), null, 0, screenshotAfter.getWidth())));
+
+			// Absolute reference strips remain usable for panel measurements with compensation enabled.
+			GradientScreen screen = context.computeOnClient(minecraft -> new GradientScreen(null));
+			context.setScreen(() -> screen);
+			context.runOnClient(minecraft -> screen.select(0));
+			context.waitTicks(3);
+			OutputProbe.Capture referenceOn = capture(context, OutputProbe::captureDitherTarget);
+			context.runOnClient(minecraft -> config.hdrShadowContrast = 0);
+			context.waitTicks(3);
+			OutputProbe.Capture referenceOff = capture(context, OutputProbe::captureDitherTarget);
+			this.check("near-black reference ramp bypasses contrast correction", Arrays.equals(referenceOn.values(), referenceOff.values()));
+		} finally {
+			context.runOnClient(minecraft -> {
+				config.hdrShadowContrast = savedContrast;
+				config.hdrShadowContrastRange = savedRange;
+				config.hdrShadowFloor = savedFloor;
+				config.hdrGamma = savedGamma;
+				config.hdrUiNits = savedUi;
+				config.dither = savedDither;
+			});
+			context.setScreen(TitleScreen::new);
+			context.waitTicks(3);
+		}
+	}
+
+	private static final class ShadowContrastScreen extends Screen {
+		private static final int[] CODES = {0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 28, 32, 40,
+			48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240, 248, 255};
+
+		private ShadowContrastScreen() {
+			super(Component.empty());
+		}
+
+		@Override
+		public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+		}
+
+		@Override
+		public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+			for (int i = 0; i < CODES.length; i++) {
+				int code = CODES[i];
+				graphics.fill(i * this.width / CODES.length, 0, (i + 1) * this.width / CODES.length, this.height,
+					0xFF000000 | code << 16 | code << 8 | code);
+			}
 		}
 	}
 

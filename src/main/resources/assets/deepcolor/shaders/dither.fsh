@@ -31,6 +31,8 @@ layout(push_constant) uniform DeepColorParams {
     float vignetteGreen;
     float vignetteBlue;
     float shadowDither;
+    float shadowContrast;
+    float shadowContrastRange;
 };
 #else
 uniform float ditherLsb;
@@ -56,6 +58,8 @@ uniform float vignetteRed;
 uniform float vignetteGreen;
 uniform float vignetteBlue;
 uniform float shadowDither;
+uniform float shadowContrast;
+uniform float shadowContrastRange;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -285,6 +289,22 @@ vec3 encodeScrgb(vec3 c) {
     return srgbDecode(clamp(c, 0.0, 1.0));
 }
 
+// Optional display compensation after HDR mapping and the shadow floor, before shadow noise.
+// f(L) = L * (1 - s + s * smoothstep(0, range, L)). This is monotonic for 0 <= s < 1,
+// keeps zero exact and rejoins the original curve with matching slope at the range boundary.
+// Scaling linear luminance preserves hue, including negative wide-gamut components.
+vec3 contrastHdrShadows(vec3 light) {
+    if (hdrActive == 0 || shadowContrast <= 0.0) {
+        return light;
+    }
+    float nits = dot(light, LUMA) * unitNits;
+    if (nits <= 0.0 || nits >= shadowContrastRange) {
+        return light;
+    }
+    float keep = 1.0 - shadowContrast * (1.0 - smoothstep(0.0, shadowContrastRange, nits));
+    return light * keep;
+}
+
 // ST 2084 / ITU-R BT.2100 Table 4. These only size the noise; output remains linear scRGB.
 float pqEncode(float nits) {
     float y = pow(nits / 10000.0, 2610.0 / 16384.0);
@@ -402,14 +422,14 @@ void main() {
             int strip = mode == 1 ? 3 - int(clamp(texCoord.y, 0.0, 0.9999) * 4.0) : mode - 2;
             if (hdrActive == 1) {
                 // The labels are drawn as white on black, so they add at interface brightness.
-                // Keep reference ramps/patches exact; the game-shadow strip previews noise.
+                // Keep reference ramps/patches exact; game shadows preview contrast and noise.
                 vec3 light = hdrPattern(strip);
-                fragColor = vec4((strip == 3 ? ditherHdrShadows(light, pixel) : light) + min(color, 1.0) * uiScale, 1.0);
+                fragColor = vec4((strip == 3 ? ditherHdrShadows(contrastHdrShadows(light), pixel) : light) + min(color, 1.0) * uiScale, 1.0);
                 return;
             }
             color = gradient(strip, pixel) + min(color, 1.0);
         }
-        fragColor = vec4(ditherHdrShadows(encodeScrgb(color), pixel), 1.0);
+        fragColor = vec4(ditherHdrShadows(contrastHdrShadows(encodeScrgb(color)), pixel), 1.0);
         return;
     }
 

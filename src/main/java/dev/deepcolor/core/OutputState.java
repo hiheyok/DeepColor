@@ -140,6 +140,8 @@ public final class OutputState {
 						+ (config.dither && config.hdrShadowDither > 0.0F ? String.format(Locale.ROOT, ", shadow noise %.1f PQ LSB %s %s",
 							config.hdrShadowDither, config.noisePattern == DeepColorConfig.NoisePattern.BLUE_NOISE ? "blue" : "gradient",
 							config.temporal ? "temporal" : "static") : "")
+						+ (config.hdrShadowContrast > 0.0F ? String.format(Locale.ROOT, ", shadow contrast %.0f%% below %.2f nits",
+							config.hdrShadowContrast * 100, config.hdrShadowContrastRange) : "")
 						+ (config.hdrShadowFloor > 0.0F ? String.format(Locale.ROOT, ", floor %.3f nits", config.hdrShadowFloor) : "")
 						+ (config.hdrGamutStretch > 0.0F ? String.format(Locale.ROOT, ", gamut %.0f%% toward %s", config.hdrGamutStretch * 100,
 							switch (config.hdrGamutTarget) {

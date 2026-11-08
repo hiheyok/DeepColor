@@ -40,7 +40,7 @@ import org.lwjgl.system.MemoryUtil;
  * this pass converts the image to absolute brightness. See {@link Hdr}.
  */
 public final class DitherPass {
-	private static final int PUSH_CONSTANT_SIZE = 96;
+	private static final int PUSH_CONSTANT_SIZE = 112;
 	private static final Identifier VIGNETTE = Identifier.withDefaultNamespace("textures/misc/vignette.png");
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
@@ -256,8 +256,10 @@ public final class DitherPass {
 				constants.putFloat(ARGB.red(tint) / 255.0F);
 				constants.putFloat(ARGB.green(tint) / 255.0F);
 				constants.putFloat(ARGB.blue(tint) / 255.0F);
-				// Offset 88, inside the existing 96-byte push constant allocation.
+				// Offsets 88, 92 and 96; the block is padded to 112 bytes.
 				constants.putFloat(hdrActive && config.dither ? config.hdrShadowDither : 0.0F);
+				constants.putFloat(hdrActive ? config.hdrShadowContrast : 0.0F);
+				constants.putFloat(config.hdrShadowContrastRange);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}
