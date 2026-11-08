@@ -234,7 +234,7 @@ public final class DitherPass {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
 				constants.putFloat(lsb(output.bits));
-				// Float output is never dithered in the real image, only in the gradient screen's strip.
+				// SDR quantization strength; HDR shadow noise has its own control.
 				constants.putFloat(strength);
 				constants.putFloat(noiseOffset);
 				constants.putInt(mode);
@@ -256,6 +256,8 @@ public final class DitherPass {
 				constants.putFloat(ARGB.red(tint) / 255.0F);
 				constants.putFloat(ARGB.green(tint) / 255.0F);
 				constants.putFloat(ARGB.blue(tint) / 255.0F);
+				// Offset 88, inside the existing 96-byte push constant allocation.
+				constants.putFloat(hdrActive && config.dither ? config.hdrShadowDither : 0.0F);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

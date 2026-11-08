@@ -165,7 +165,17 @@ Notes:
 
 - The OpenGL backend gets a floating-point window from the NVIDIA driver as well, so both backends work.
   Iris shader packs work too: their output is expanded like the vanilla world.
-- Float output is not dithered and needs no dither. Windows sends it to the monitor as 10-bit PQ.
+- Float output stays unquantized. Optional **HDR shadow noise** (`hdrShadowDither`, default `0`,
+  range `0`–`8` in steps of `0.5` in the UI) adds luminance grain before presentation to mask
+  near-black banding on OLED panels. Try `2`, then `4` or `8` if needed; stronger values show more
+  grain. It uses nominal 10-bit PQ steps to size the noise, independently of SDR dither depth and
+  strength. The amplitude follows [BT.2100's PQ transfer function](https://www.itu.int/rec/R-REC-BT.2100),
+  but the output stays linear scRGB. Symmetric linear-light noise preserves average brightness and
+  hue, keeps true black black, and fades out from 1 to 10 nits. It follows **Noise pattern** and
+  **Animate noise**, requires **Dithering** and active HDR, and applies immediately. Available in
+  Mod Menu and Sodium's HDR page. The game-shadow gradient strip previews it; reference ramps,
+  patches, grey steps and SDR screenshots stay exact. It masks bands; it cannot restore detail
+  already lost upstream or guarantee how a particular panel processes near-black levels.
 - Turning Windows HDR off while playing switches to a plain SDR image on the next frame. Turning it on
   needs a restart, because the surface type is chosen at startup.
 - Screenshots stay SDR. Expanded highlights are clipped to white in them.

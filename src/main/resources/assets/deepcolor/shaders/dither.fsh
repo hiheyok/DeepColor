@@ -30,6 +30,7 @@ layout(push_constant) uniform DeepColorParams {
     float vignetteRed;
     float vignetteGreen;
     float vignetteBlue;
+    float shadowDither;
 };
 #else
 uniform float ditherLsb;
@@ -54,6 +55,7 @@ uniform int additiveOverlay;
 uniform float vignetteRed;
 uniform float vignetteGreen;
 uniform float vignetteBlue;
+uniform float shadowDither;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -283,6 +285,41 @@ vec3 encodeScrgb(vec3 c) {
     return srgbDecode(clamp(c, 0.0, 1.0));
 }
 
+// ST 2084 / ITU-R BT.2100 Table 4. These only size the noise; output remains linear scRGB.
+float pqEncode(float nits) {
+    float y = pow(nits / 10000.0, 2610.0 / 16384.0);
+    return pow((0.8359375 + 18.8515625 * y) / (1.0 + 18.6875 * y), 2523.0 / 32.0);
+}
+
+float pqDecode(float code) {
+    float y = pow(max(code, 0.0), 32.0 / 2523.0);
+    return 10000.0 * pow(max(y - 0.8359375, 0.0) / (18.8515625 - 18.6875 * y), 16384.0 / 2610.0);
+}
+
+// Mask near-black panel/compositor banding with optional fine luminance grain. A fixed linear
+// scRGB LSB is much too large here. Size the amplitude in nominal 10-bit PQ steps instead.
+// Symmetric *linear-light* noise avoids the brightness bias of adding noise directly in PQ.
+// One shared sample scales all channels, preserving hue and negative wide-gamut components.
+vec3 ditherHdrShadows(vec3 light, vec2 pixel) {
+    if (hdrActive == 0 || shadowDither <= 0.0) {
+        return light;
+    }
+    float luminance = dot(light, LUMA);
+    float nits = luminance * unitNits;
+    if (nits <= 0.0 || nits >= 10.0) {
+        return light;
+    }
+    float code = pqEncode(nits);
+    float radius = shadowDither / 1023.0;
+    float amplitude = min(nits - pqDecode(max(0.0, code - radius)), pqDecode(code + radius) - nits);
+    // Never clip at black or the configured peak: clipping would bias the average brightness.
+    float largest = max(light.r, max(light.g, light.b));
+    float peakRoom = nits * max(0.0, peakScale / max(largest, 1e-10) - 1.0);
+    amplitude = max(0.0, min(amplitude, min(0.95 * nits, peakRoom)));
+    amplitude *= 1.0 - smoothstep(1.0, 10.0, nits);
+    return light * (1.0 + triangular(uniformNoise(pixel)) * amplitude / nits);
+}
+
 // Near-black test pattern for HDR, in absolute nits, to find where the panel stops showing detail.
 // Strip 0: continuous log ramp from 0.0001 to 1 nit, with true black at the far left.
 // Strip 1: the same ramp through the shadow floor.
@@ -354,9 +391,10 @@ void main() {
     vec2 pixel = floor(gl_FragCoord.xy);
 
     if (encoding == 1) {
-        // Float output: nothing to quantize or dither. Values above 1.0 are expanded highlights.
+        // Float output stays unquantized. Optional shadow noise masks downstream banding.
         color = max(color, 0.0);
         if (mode == 6) {
+            // Keep the grey reference chart exact.
             fragColor = vec4(encodeScrgb(stepChart() + min(color, 1.0)), 1.0);
             return;
         }
@@ -364,12 +402,14 @@ void main() {
             int strip = mode == 1 ? 3 - int(clamp(texCoord.y, 0.0, 0.9999) * 4.0) : mode - 2;
             if (hdrActive == 1) {
                 // The labels are drawn as white on black, so they add at interface brightness.
-                fragColor = vec4(hdrPattern(strip) + min(color, 1.0) * uiScale, 1.0);
+                // Keep reference ramps/patches exact; the game-shadow strip previews noise.
+                vec3 light = hdrPattern(strip);
+                fragColor = vec4((strip == 3 ? ditherHdrShadows(light, pixel) : light) + min(color, 1.0) * uiScale, 1.0);
                 return;
             }
             color = gradient(strip, pixel) + min(color, 1.0);
         }
-        fragColor = vec4(encodeScrgb(color), 1.0);
+        fragColor = vec4(ditherHdrShadows(encodeScrgb(color), pixel), 1.0);
         return;
     }
 
