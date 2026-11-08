@@ -200,15 +200,33 @@ vec3 expandWorld(vec3 world) {
 // current = a * ui + (1 - a) * k * world, where k is any darkening that left alpha alone (the
 // vignette). The expanded image is the same with world replaced by its expansion, so the difference
 // is added for the share that is world.
+//
+// Alpha alone is not proof, since a mod overlay may draw without writing alpha. So where alpha says
+// pure world, the pixel must also look like it: every channel darkened by the same factor, and not
+// by much. A dark tooltip over a bright sky fails that and is left alone instead of glowing, and so
+// does an overlay that tints the world unevenly (whose highlights would otherwise change color).
 vec3 withExpandedWorld(vec3 current, float alpha) {
     vec3 world = texture(WorldSampler, texCoord).rgb;
-    world = mix(world, vec3(0.0), notEqual(world, world));
+    world = mix(max(world, 0.0), vec3(0.0), notEqual(world, world));
     float worldShare = 1.0 - clamp(alpha, 0.0, 1.0);
-    float worldLuminance = dot(max(world, 0.0), LUMA) * worldShare;
+    vec3 shareOfWorld = world * worldShare;
+    float worldLuminance = dot(shareOfWorld, LUMA);
+    if (worldLuminance <= 1e-4) {
+        return current;
+    }
     // Darkening of the world itself, found from how much darker the pixel is than the world share.
     // Interface that adds light makes this 1 or more, which counts as no darkening.
-    float darkening = worldLuminance > 1e-4 ? clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0) : 1.0;
-    return current + worldShare * darkening * (expandWorld(world) - world);
+    float darkening = clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0);
+    float trust = 1.0;
+    if (alpha < 0.02) {
+        vec3 usable = step(vec3(0.002), shareOfWorld);
+        vec3 ratio = max(current, 0.0) / max(shareOfWorld, vec3(0.002));
+        vec3 spread = abs(ratio - darkening) * usable;
+        bool even = max(spread.r, max(spread.g, spread.b)) <= 0.03 + 0.03 * darkening;
+        // The vignette darkens by well under half; anything darker is not the world showing through.
+        trust = even ? smoothstep(0.35, 0.6, darkening) : 0.0;
+    }
+    return current + trust * worldShare * darkening * (expandWorld(world) - world);
 }
 
 vec3 stretchGamut(vec3 light) {

@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.textures.GpuTexture;
+import dev.deepcolor.DeepColor;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
@@ -71,7 +72,7 @@ public final class OutputProbe {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;
-			// The buffer goes away whatever happens, also when mapping fails.
+			// The buffer goes away whatever happens, and the callback always gets an answer.
 			try (buffer; GpuBufferSlice.MappedView view = buffer.map(true, false)) {
 				ByteBuffer data = view.data();
 				int mask = bits == 10 ? 0x3FF : 0xFF;
@@ -83,6 +84,10 @@ public final class OutputProbe {
 						red[i] = data.getInt(i * 4) & mask;
 					}
 				}
+			} catch (RuntimeException e) {
+				DeepColor.LOGGER.warn("Could not read back the dither target", e);
+				callback.accept(null);
+				return;
 			}
 			callback.accept(new Capture("dither target (" + format + ")", bits, width, height, red, values));
 		}, 0);

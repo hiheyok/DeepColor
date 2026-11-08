@@ -93,7 +93,7 @@ public final class DitherPass {
 			int quantizeBits = config.dither || gradientMode != 0 ? OutputState.ditherBits() : bits;
 			// The world to expand into HDR highlights, when this frame has one. Taken every frame, so
 			// it never carries over to frames without a world.
-			GpuTextureView world = HdrExpandPass.takeWorldForFrame();
+			GpuTextureView world = HdrExpandPass.takeWorldForFrame(source);
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
 				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? world : null);
 			OutputProbe.onFramePresented(target, bits);
@@ -102,6 +102,8 @@ public final class DitherPass {
 			// Presenting the undithered image is always possible, so never let this take the game down.
 			failed = true;
 			DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
+			// The world may already be marked with alpha 0 for this frame, which is now shown as is.
+			HdrExpandPass.restoreOpaque();
 			OutputProbe.onFramePresented(null, OutputState.bits());
 			return source;
 		}

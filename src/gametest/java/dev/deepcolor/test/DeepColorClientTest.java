@@ -413,10 +413,10 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	}
 
 	/**
-	 * Screenshots are 8-bit SDR images, so the HDR brightness expansion must not show in them: with
-	 * either mapping they must match the screenshot taken without one, in the world and with the
-	 * pause menu open (whose blur reads the main target). A wrong one shows plainly: Linear at
-	 * 1000/203 nits multiplies the world by about 4.9, Highlights clips bright areas to white.
+	 * The HDR brightness expansion must reach the screen but never screenshots, which are 8-bit SDR
+	 * images, in the world and with the pause menu open (whose blur reads the main target).
+	 * On screen, Linear at 1000/203 nits multiplies the world by about 4.9; behind the pause menu
+	 * the menu's dark backdrop covers part of it, so less. In screenshots it must not show at all.
 	 */
 	private void checkHdrScreenshots(ClientGameTestContext context) {
 		if (!context.computeOnClient(minecraft -> Hdr.active())) {
@@ -428,35 +428,60 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
 		int peak = config.hdrPeakNits;
 		int ui = config.hdrUiNits;
-		context.runOnClient(minecraft -> {
-			config.hdrPeakNits = 1000;
-			config.hdrUiNits = 203;
-		});
-		for (boolean paused : new boolean[]{false, true}) {
-			context.setScreen(() -> paused ? new PauseScreen(true) : null);
-			context.waitTicks(5);
-			String where = paused ? "pause menu" : "world";
-			for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
-				// The sky keeps brightening for a while after "time set noon" (8% of pixels change
-				// within seconds), so each mapping is compared with an SDR screenshot taken just before.
-				String name = (paused ? "paused_" : "") + tested.name().toLowerCase(Locale.ROOT);
-				context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
-				context.waitTicks(3);
-				BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + name);
-				context.runOnClient(minecraft -> config.hdrMapping = tested);
-				context.waitTicks(3);
-				BufferedImage shot = screenshot(context, "hdr_shot_" + name);
-				double changed = changedShare(plain, shot);
-				this.check(String.format(Locale.ROOT, "%s screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", where, tested, changed), changed < 2.0);
+		try {
+			context.runOnClient(minecraft -> {
+				config.hdrPeakNits = 1000;
+				config.hdrUiNits = 203;
+			});
+			for (boolean paused : new boolean[]{false, true}) {
+				context.setScreen(() -> paused ? new PauseScreen(true) : null);
+				context.waitTicks(5);
+				String where = paused ? "pause menu" : "world";
+				for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
+					// The sky keeps brightening for a while after "time set noon" (8% of pixels change
+					// within seconds), so each mapping is compared with an SDR image taken just before.
+					String name = (paused ? "paused_" : "") + tested.name().toLowerCase(Locale.ROOT);
+					context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
+					context.waitTicks(3);
+					double plainScreen = meanValue(capture(context, OutputProbe::captureDitherTarget));
+					BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + name);
+					context.runOnClient(minecraft -> config.hdrMapping = tested);
+					context.waitTicks(3);
+					double expandedScreen = meanValue(capture(context, OutputProbe::captureDitherTarget));
+					BufferedImage shot = screenshot(context, "hdr_shot_" + name);
+					double changed = changedShare(plain, shot);
+					this.check(String.format(Locale.ROOT, "%s screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", where, tested, changed), changed < 2.0);
+					double gain = expandedScreen / plainScreen;
+					if (tested == DeepColorConfig.HdrMapping.LINEAR) {
+						this.check(String.format(Locale.ROOT, "%s on screen is expanded by Linear (mean %.2fx)", where, gain), gain > (paused ? 1.5 : 3.0));
+					} else {
+						this.log(String.format(Locale.ROOT, "%s on screen with Highlights: mean %.2fx", where, gain));
+					}
+				}
+			}
+		} finally {
+			context.setScreen(() -> null);
+			context.runOnClient(minecraft -> {
+				config.hdrMapping = mapping;
+				config.hdrPeakNits = peak;
+				config.hdrUiNits = ui;
+			});
+			context.waitTicks(3);
+		}
+	}
+
+	/** Mean brightness of a float capture (1.0 = SDR white on macOS, 80 nits on Windows). */
+	private static double meanValue(OutputProbe.Capture capture) {
+		if (capture == null) {
+			return Double.NaN;
+		}
+		double sum = 0.0;
+		for (int y = 0; y < capture.height(); y++) {
+			for (int x = 0; x < capture.width(); x++) {
+				sum += capture.value(x, y);
 			}
 		}
-		context.setScreen(() -> null);
-		context.runOnClient(minecraft -> {
-			config.hdrMapping = mapping;
-			config.hdrPeakNits = peak;
-			config.hdrUiNits = ui;
-		});
-		context.waitTicks(3);
+		return sum / (capture.width() * capture.height());
 	}
 
 	/**

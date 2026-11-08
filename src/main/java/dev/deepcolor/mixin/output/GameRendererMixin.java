@@ -13,6 +13,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(GameRenderer.class)
 abstract class GameRendererMixin {
+	@Inject(method = "render()V", at = @At("HEAD"))
+	private void deepcolor$frameStarted(CallbackInfo ci) {
+		HdrExpandPass.frameStarted();
+	}
+
 	@Inject(
 		method = "render()V",
 		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;applyPostEffects()V", shift = At.Shift.AFTER)
@@ -21,8 +26,8 @@ abstract class GameRendererMixin {
 		HdrExpandPass.apply(((GameRenderer) (Object) this).mainRenderTarget());
 	}
 
-	@Inject(method = "processBlurEffect", at = @At("HEAD"))
-	private void deepcolor$blur(CallbackInfo ci) {
-		HdrExpandPass.onBlur();
+	@Inject(method = "processBlurEffect", at = @At("TAIL"))
+	private void deepcolor$afterBlur(CallbackInfo ci) {
+		HdrExpandPass.afterBlur(((GameRenderer) (Object) this).mainRenderTarget());
 	}
 }

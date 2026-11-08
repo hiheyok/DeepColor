@@ -62,8 +62,9 @@ public final class MacEdr {
 				DeepColor.LOGGER.warn("HDR output: the OpenGL view does not support EDR");
 				return false;
 			}
-			// EDR goes on last, once the color space is in place: EDR in the default color space
-			// would show the linear image far too dark, and isOn() would report HDR for it.
+			// The extended linear color space and EDR only work together: EDR in the default color
+			// space shows the linear image far too dark, the linear color space without EDR washes it
+			// out. So the color space goes first and is put back if EDR then does not turn on.
 			long create = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "CGColorSpaceCreateWithName");
 			long release = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "CGColorSpaceRelease");
 			long nameSymbol = DynamicLinkLoader.dlsym(DynamicLinkLoader.RTLD_DEFAULT, "kCGColorSpaceExtendedLinearSRGB");
@@ -83,11 +84,31 @@ public final class MacEdr {
 				DeepColor.LOGGER.warn("HDR output: could not wrap the extended linear sRGB color space");
 				return false;
 			}
+			// The current color space, kept alive until EDR is known to be on.
+			long previous = JNI.invokePPP(nsWindow, sel("colorSpace"), msgSend);
+			if (previous != 0L) {
+				JNI.invokePPP(previous, sel("retain"), msgSend);
+			}
 			JNI.invokePPPV(nsWindow, sel("setColorSpace:"), nsColorSpace, msgSend);
 			// The window retains the color space, so both references can go.
 			JNI.invokePPV(nsColorSpace, sel("release"), msgSend);
 			JNI.invokePV(cgColorSpace, release);
-			JNI.invokePPV(view, setWants, true, msgSend);
+			boolean on = false;
+			try {
+				JNI.invokePPV(view, setWants, true, msgSend);
+				on = (JNI.invokePPP(view, sel("wantsExtendedDynamicRangeOpenGLSurface"), msgSend) & 0xFF) != 0;
+			} finally {
+				if (!on && previous != 0L) {
+					JNI.invokePPPV(nsWindow, sel("setColorSpace:"), previous, msgSend);
+				}
+				if (previous != 0L) {
+					JNI.invokePPV(previous, sel("release"), msgSend);
+				}
+			}
+			if (!on) {
+				DeepColor.LOGGER.warn("HDR output: the OpenGL view did not accept EDR, color space restored");
+				return false;
+			}
 			DeepColor.LOGGER.info("HDR output: EDR enabled for the OpenGL view");
 			return true;
 		} catch (Throwable e) {

@@ -53,8 +53,9 @@ public final class Hdr {
 	 * by more than a quarter.
 	 */
 	public static void logChanges() {
-		// Only the HDR surface uses any of this. Without it, skip the SDL queries every frame.
-		if (!OutputState.isScrgb()) {
+		// Only of interest when HDR was asked for, also (and most of all) when it did not turn on.
+		// Otherwise skip the SDL queries every frame.
+		if (!requested()) {
 			return;
 		}
 		long window = window();

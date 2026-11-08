@@ -38,18 +38,39 @@ public final class HdrExpandPass {
 		.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
 		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALPHA))
 		.build();
+	private static final RenderPipeline MARK_OPAQUE = RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
+		.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "pipeline/opaque_alpha"))
+		.withVertexShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "fullscreen"))
+		.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "opaque_alpha"))
+		.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALPHA))
+		.build();
 
 	/** The world as it was when the interface started drawing. */
 	private static @Nullable GpuTexture world;
 	private static @Nullable GpuTextureView worldView;
-	/** Set when the current frame has a world to expand; cleared when the frame is shown. */
+	/**
+	 * Set when the current frame has a world to expand. Cleared when a frame starts and when it is
+	 * shown, so it never carries over, also not past a frame that was rendered but never shown.
+	 */
 	private static boolean pending;
+	/** Set when this frame cleared the main target's alpha, until the frame ends or it is undone. */
+	private static boolean marked;
+	/** The main target whose alpha was cleared this frame. */
+	private static @Nullable GpuTexture markedTarget;
+	private static @Nullable GpuTextureView markedView;
 	private static float boost;
 	private static DeepColorConfig.HdrMapping mapping = DeepColorConfig.HdrMapping.HIGHLIGHTS;
 	private static boolean failed;
 	private static boolean warnedFormat;
 
 	private HdrExpandPass() {
+	}
+
+	/** At the start of every frame, with or without a world. */
+	public static void frameStarted() {
+		pending = false;
+		marked = false;
 	}
 
 	/** After the post effects, before the interface. Only reached on frames that render a world. */
@@ -91,6 +112,9 @@ public final class HdrExpandPass {
 				pass.draw(3, 1, 0, 0);
 			}
 			pending = true;
+			marked = true;
+			markedTarget = color;
+			markedView = colorView;
 			boost = frameBoost;
 			mapping = config.hdrMapping;
 		} catch (RuntimeException e) {
@@ -100,18 +124,50 @@ public final class HdrExpandPass {
 	}
 
 	/**
-	 * The menu blur spreads the world's alpha 0 across the blurred image, which no longer lines up
-	 * with the world copy. Such a frame shows its world without expansion, behind the menu.
+	 * After the menu blur, which blurs the main target in place: the world copy no longer lines up
+	 * with it, so the blurred image becomes the world copy. Its alpha is blurred too, so the world
+	 * stays marked, and the world behind the menu keeps its HDR brightness.
 	 */
-	public static void onBlur() {
-		pending = false;
+	public static void afterBlur(RenderTarget main) {
+		GpuTexture color = main.getColorTexture();
+		if (!pending || world == null || color != markedTarget) {
+			return;
+		}
+		try {
+			RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, color.getWidth(0), color.getHeight(0));
+		} catch (RuntimeException e) {
+			pending = false;
+			DeepColor.LOGGER.error("Could not update the world copy after the menu blur", e);
+		}
 	}
 
-	/** The world copy, when the frame being shown has one to expand. Clears the frame's state. */
-	static @Nullable GpuTextureView takeWorldForFrame() {
-		boolean ready = pending;
+	/**
+	 * The world copy, when the frame being shown has one and is shown from the main target it was
+	 * made for. Clears the frame's state.
+	 */
+	static @Nullable GpuTextureView takeWorldForFrame(GpuTextureView shown) {
+		boolean ready = pending && shown.texture() == markedTarget;
 		pending = false;
 		return ready ? worldView : null;
+	}
+
+	/**
+	 * Makes the main target opaque again when this frame marked the world but is shown without the
+	 * final pass (it failed): alpha 0 would otherwise let the world show through on a compositor
+	 * that uses the window's alpha.
+	 */
+	static void restoreOpaque() {
+		if (!marked || markedView == null) {
+			return;
+		}
+		pending = false;
+		marked = false;
+		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color restore alpha", markedView, Optional.empty())) {
+			pass.setPipeline(ModPipelines.get(MARK_OPAQUE));
+			pass.draw(3, 1, 0, 0);
+		} catch (RuntimeException e) {
+			DeepColor.LOGGER.error("Could not make the image opaque again", e);
+		}
 	}
 
 	static float boost() {
@@ -137,6 +193,9 @@ public final class HdrExpandPass {
 
 	public static void close() {
 		pending = false;
+		marked = false;
+		markedTarget = null;
+		markedView = null;
 		if (worldView != null) {
 			worldView.close();
 			worldView = null;
