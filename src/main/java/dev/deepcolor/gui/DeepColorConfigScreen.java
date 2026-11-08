@@ -62,7 +62,9 @@ public final class DeepColorConfigScreen extends Screen {
 		this.addRenderableWidget(enumButton(right, y, "hdr_mapping", DeepColorConfig.HdrMapping.values(), config.hdrMapping, value -> config.hdrMapping = value));
 		y += ROW_HEIGHT;
 		this.addRenderableWidget(new GammaSlider(left, y, config));
-		this.addRenderableWidget(new ShadowDitherSlider(right, y, config));
+		this.addRenderableWidget(Button.builder(Component.translatable("deepcolor.config.hdr_shadows"),
+			button -> this.minecraft.gui.setScreen(new DeepColorHdrShadowsScreen(this)))
+			.bounds(right, y, WIDGET_WIDTH, 20).build());
 		y += ROW_HEIGHT + SECTION_GAP;
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_DONE, button -> this.onClose())
 			.bounds(this.width / 2 - 100, y, 200, 20)
@@ -122,29 +124,6 @@ public final class DeepColorConfigScreen extends Screen {
 		protected void applyValue() {
 			int step = (int) Math.round(this.value * STEPS);
 			this.config.hdrGamma = step == 0 ? DeepColorConfig.SRGB_CURVE : DeepColorConfig.MIN_GAMMA + (step - 1) / 20.0F;
-		}
-	}
-
-	private static final class ShadowDitherSlider extends AbstractSliderButton {
-		private final DeepColorConfig config;
-
-		private ShadowDitherSlider(int x, int y, DeepColorConfig config) {
-			super(x, y, WIDGET_WIDTH, 20, CommonComponents.EMPTY, config.hdrShadowDither / DeepColorConfig.MAX_HDR_SHADOW_DITHER);
-			this.config = config;
-			this.setTooltip(net.minecraft.client.gui.components.Tooltip.create(Component.translatable("deepcolor.option.hdr_shadow_dither.tooltip")));
-			this.updateMessage();
-		}
-
-		@Override
-		protected void updateMessage() {
-			Component amount = this.config.hdrShadowDither == 0.0F ? Component.translatable("deepcolor.option.hdr_shadow_floor.off")
-				: Component.literal(String.format(Locale.ROOT, "%.1f", this.config.hdrShadowDither));
-			this.setMessage(Component.translatable("deepcolor.option.hdr_shadow_dither.value", amount));
-		}
-
-		@Override
-		protected void applyValue() {
-			this.config.hdrShadowDither = Math.round(this.value * DeepColorConfig.MAX_HDR_SHADOW_DITHER * 2) / 2.0F;
 		}
 	}
 

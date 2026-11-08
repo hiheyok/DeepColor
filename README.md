@@ -125,6 +125,10 @@ What it does:
 | `hdrMapping` | `highlights`, `linear`, `none` | `highlights` |
 | `hdrGamma` | `1.8` to `3.0`, or `0` for the sRGB curve Windows uses | `2.2` |
 | `hdrShadowFloor` | `0` (off) to `0.2` nits | `0` |
+| `hdrShadowContrast` | `0` (off) to `0.95` (95% near-black reduction) | `0` |
+| `hdrShadowContrastRange` | `0.1` to `20` nominal nits | `2` |
+| `hdrFloorDither` | `false`, `true` (panel-floor-aware noise) | `false` |
+| `hdrShadowDither` | `0` (off) to `8` nominal 10-bit PQ steps | `0` |
 | `hdrGamutStretch` | `0` (accurate sRGB) to `1` (fully stretched to the target) | `0` |
 | `hdrGamutTarget` | `p3`, `adobe`, `bt2020` | `p3` |
 
@@ -158,6 +162,53 @@ darkest shades. Set `hdrShadowFloor` to about the dimmest patch you can still se
 darkest shadows to that level (applied to luminance, so colors keep their hue); true black stays
 black, and anything well above the floor gains only the floor itself.
 
+**Milky HDR shadows.** Optional **Near-black contrast** darkens only tones below **Contrast range**,
+with a smooth transition back to the original brightness at that limit. Find it in Mod Menu under
+**HDR shadows...**, or on Sodium's HDR page. Start with **50%** and **2 nits**, then adjust the
+strength and range separately while looking at a dark scene. Higher strength darkens the lowest
+tones more; a higher range affects more of the shadows. Both apply immediately. The strength UI
+runs from Off to 95% in steps of 5%; the range UI offers 0.1, 0.2, 0.5, 1, 2, 5, 10 and 20 nits.
+Valid custom config values between those positions are kept until a slider is moved.
+
+This is adjustable display compensation, not a measured correction profile for the AW2725DF.
+It preserves true black and hue, keeps the curve monotonic without a hard black cutoff, and leaves
+all tones at or above the selected range unchanged. Strong correction can still hide shadow detail
+on the display. It affects the final Minecraft image, including dark menus, and cannot change
+YouTube, other applications, or a panel's physical black level. Like the other nits settings, its
+range is absolute on Windows and relative to display brightness on macOS.
+
+The correction runs after HDR mapping and **Shadow floor**, before **HDR shadow noise**. Shadow
+floor lifts shadows, so leave it off initially when tuning contrast. Contrast works independently
+of Dithering and has no effect with HDR inactive. The game-shadow strip of `/deepcolor gradient`
+previews both contrast and noise; the reference ramps, fixed-nit patches and grey chart bypass
+these two controls. SDR screenshots remain unchanged. Setting contrast to Off restores the
+previous output exactly.
+
+**Calibrating while viewing the ramp.** In **Open gradient test**, press **C** or click **Calibrate**.
+The game-shadow ramp stays visible above controls for gamma, floor, noise, contrast, contrast range
+and interface white (Auto, then 40–600 nits). Dither, noise animation and **Floor dither** can be toggled here too. Values
+apply live and are saved when hiding the controls or leaving the screen. Keys 1–5 still switch test
+patterns; press C again to view the full-size ramp. RGB 0–32 covers only dark shades, so its right
+edge is dark grey. Key 5 is a separate chart that includes white.
+
+For stepped/crushed shadows, **Smooth shadows** starts at contrast Off, floor 0.01 nits, noise 2,
+Floor dither On, Dither On and animation On. This is a starting point, not a display calibration.
+Tune **White** to match overall brightness first, then **Floor** to the dimmest visible HDR patch,
+and adjust **Noise** while watching the first part of the ramp. Contrast reduction can worsen crush.
+
+Optional **Floor dither** (`hdrFloorDither`) uses the chosen shadow floor as the panel's minimum
+visible brightness. Below `floor * (1 + noise)`, it distributes light between zero and pulses at
+that brightness, preserving the intended linear-light average and true black. Above that region,
+normal noise blends in smoothly and stays above the measured floor. It requires active HDR,
+Dithering, a nonzero noise strength and nonzero floor. It defaults to Off. Grain or flicker may be
+visible, especially at low frame rates; it cannot recover upstream detail or guarantee a particular
+panel's response. Floor lifting still applies before this dither mode.
+
+With float output, **P** measures the number of actual output values in the first 20% of the game
+ramp and the lowest positive nominal brightness. This reads the mod's final target, not the panel.
+A large count there with visible steps on the monitor points to a later stage of the display path;
+with noise enabled it counts noisy output values too. macOS nits remain relative to display brightness.
+
 The peak Windows reports comes from the Windows HDR Calibration app or the monitor itself. On the
 AW2725DF it reports 1000 nits.
 
@@ -173,7 +224,7 @@ Notes:
   but the output stays linear scRGB. Symmetric linear-light noise preserves average brightness and
   hue, keeps true black black, and fades out from 1 to 10 nits. It follows **Noise pattern** and
   **Animate noise**, requires **Dithering** and active HDR, and applies immediately. Available in
-  Mod Menu and Sodium's HDR page. The game-shadow gradient strip previews it; reference ramps,
+  Mod Menu under **HDR shadows...** and Sodium's HDR page. The game-shadow gradient strip previews it; reference ramps,
   patches, grey steps and SDR screenshots stay exact. It masks bands; it cannot restore detail
   already lost upstream or guarantee how a particular panel processes near-black levels.
 - Turning Windows HDR off while playing switches to a plain SDR image on the next frame. Turning it on
@@ -268,6 +319,59 @@ Noise is a 64x64 blue noise map, generated at startup with Ulichney's void-and-c
 every pixel walks evenly through its range and a few frames average out to the true level. Offsetting
 the position instead, as version 1.0 did, made some frame pairs nearly repeat. The pass owns its own
 shader source and pipeline cache because the first frames are presented before resource packs load.
+
+## HDR performance measurements
+
+The opt-in benchmark runs **one game instance at a time**:
+
+```
+python tools/benchmark_hdr.py opengl vulkan
+```
+
+It compares the HDR shader before these changes (`d0a216b`, before PRs 8 and 9) against the current
+shader with effects Off, contrast 50%, noise 2/8, Smooth shadows, and aggressive combined settings.
+It requires that baseline revision in local Git history; `--baseline <revision>` selects another.
+The old shader is generated into test build output and is not shipped. Benchmark code and frame
+sampling also live only in the test mod. Runtime rendering code is unchanged by the benchmark.
+
+Each renderer is warmed up, then runs 20 interleaved samples of 16 individually completed draws per
+mode at 1920x1080 and 2560x1440. Dark, mixed-brightness and sub-floor images exercise different shader
+branches. Every draw completes before timing the next, preventing overwritten passes from being
+coalesced by a tile GPU. Input/output checks verify that the fixture actually renders. Timings are
+**CPU+GPU wall latency including submission and synchronization**, not pure GPU execution time.
+The M5's timestamp results were unavailable or inconsistent, so they are excluded from conclusions.
+
+Measured on 2026-11-08: Apple M5, 10 GPU cores, 32 GB, AC power, vanilla renderer. At 2560x1440 on
+the dark ramp, median completed-pass latencies were:
+
+| Configuration | OpenGL | Vulkan |
+| --- | --- | --- |
+| Historical HDR shader | 0.642 ms | 0.360 ms |
+| Current shader, effects Off | 0.645 ms | 0.422 ms |
+| Contrast 50% | 0.644 ms | 0.423 ms |
+| HDR noise 2 | 0.642 ms | 0.590 ms |
+| HDR noise 8 | 0.644 ms | 0.591 ms |
+| Smooth shadows | 0.645 ms | 0.584 ms |
+| Aggressive combined settings | 0.644 ms | 0.529 ms |
+
+OpenGL differences did not separate reliably from measurement noise. Vulkan shows about 0.06 ms
+additional latency with effects disabled versus the historical shader, and about 0.23 ms total
+additional latency with ordinary shadow noise on this dark image. Noise 2 versus 8 changes amplitude
+rather than algorithmic complexity, and had similar cost. On the mixed image the noise-2 increment
+versus historical HDR was about 0.13 ms. The pulse branch can bypass PQ noise calculations for dim
+pixels, so aggressive settings are not necessarily slower on every input.
+
+A stationary night-world check used four alternating blocks of at least 180 frame intervals per
+mode, with VSync and idle throttling disabled. At its small 854x480 render size, medians ranged from
+0.725–0.734 ms on OpenGL and 1.003–1.119 ms on Vulkan. This light, harness-driven scene is not a
+representative 1440p gameplay FPS test. Pass latency includes synchronization overhead and must not
+be added directly to a game's frame time. These results do not predict a Windows GPU or shader-pack
+workload. Calibration widgets exist only while that screen is open; the P probe performs an explicit
+readback rather than continuous sampling.
+
+[Aggregated samples and paired timing intervals](tools/performance-results/apple-m5-hdr-2026-11-08.json)
+are retained with the benchmark. Full raw samples and logs are written to timestamped folders under
+`run/performance/`; no simultaneous benchmark instances are started.
 
 ## Development
 
