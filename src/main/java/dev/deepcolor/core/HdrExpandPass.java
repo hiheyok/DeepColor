@@ -173,6 +173,9 @@ public final class HdrExpandPass {
 		try {
 			RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, color.getWidth(0), color.getHeight(0));
 			additiveOverlay = false;
+			// The vignette was drawn before the blur, so it is in the new copy already; dividing it
+			// out again in the final pass would darken the expansion twice.
+			vignetteColor = 0;
 			blursKept++;
 		} catch (RuntimeException e) {
 			frame = current.withoutExpansion();

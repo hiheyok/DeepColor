@@ -627,7 +627,20 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			double gain = linear / none;
 			this.check(String.format(Locale.ROOT, "corners under a full-strength vignette keep the Linear gain (%.2f of %.2f)", gain, expected),
 				gain > expected * 0.9 && gain < expected * 1.05);
+			// Behind the blurred pause menu the vignette is part of the blurred copy, so it must not
+			// be divided out a second time: the corners gain the same with and without it.
+			context.setScreen(() -> new PauseScreen(true));
+			context.waitTicks(5);
+			double pausedWith = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR)
+				/ this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(false));
+			double pausedWithout = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR)
+				/ this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			context.setScreen(() -> null);
+			this.check(String.format(Locale.ROOT, "pause menu corners gain the same with a full-strength vignette (%.2fx vs %.2fx without)", pausedWith, pausedWithout),
+				pausedWith > pausedWithout * 0.9 && pausedWith < pausedWithout * 1.1);
 		} finally {
+			context.setScreen(() -> null);
 			context.runOnClient(minecraft -> {
 				minecraft.options.vignette().set(vignette);
 				config.hdrMapping = mapping;
