@@ -13,6 +13,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(GameRenderer.class)
 abstract class GameRendererMixin {
+	/** The game records the interface (and so the vignette) here, before render(). */
+	@Inject(method = "extract", at = @At("HEAD"))
+	private void deepcolor$extractStarted(CallbackInfo ci) {
+		HdrExpandPass.extractStarted();
+	}
+
 	@Inject(method = "render()V", at = @At("HEAD"))
 	private void deepcolor$frameStarted(CallbackInfo ci) {
 		HdrExpandPass.frameStarted();

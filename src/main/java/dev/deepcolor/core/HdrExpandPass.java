@@ -26,7 +26,9 @@ import org.jspecify.annotations.Nullable;
  * alpha by how much it covers. The final pass then knows, per pixel, how much of it is world and
  * adds that share of the expansion. Additive nausea preserves coverage alpha and is flagged so
  * its colored light is not mistaken for an untracked interface. Overlays that only darken the world without touching alpha
- * (the vignette) are found by comparing with the copy, and darken the expanded world the same way.
+ * are found by comparing with the copy, and darken the expanded world the same way. The vanilla
+ * vignette is not guessed: its color is recorded when it is drawn and the final pass divides it out
+ * exactly.
  *
  * <p>Known limit of this design: until the final pass, the world has alpha 0 in the main target. Its
  * colors are the plain SDR image, but a mod that reads the main target's alpha in that window (a
@@ -71,6 +73,8 @@ public final class HdrExpandPass {
 	private static int blursKept;
 	private static boolean failed;
 	private static boolean additiveOverlay;
+	/** The ARGB color the vanilla vignette was recorded with for this frame, 0 when it is not drawn. */
+	private static int vignetteColor;
 	private static boolean warnedFormat;
 
 	private HdrExpandPass() {
@@ -83,6 +87,16 @@ public final class HdrExpandPass {
 		if (world != null && System.nanoTime() - lastUsedNanos > FREE_AFTER_NANOS) {
 			close();
 		}
+	}
+
+	/** At the start of recording the frame's interface, before render(). */
+	public static void extractStarted() {
+		vignetteColor = 0;
+	}
+
+	/** The vanilla vignette is drawn this frame with this ARGB color (see HudMixin). */
+	public static void vignetteExtracted(int argb) {
+		vignetteColor = argb;
 	}
 
 	/** Called when the full-screen additive nausea pipeline is bound after marking the world. */
@@ -172,7 +186,7 @@ public final class HdrExpandPass {
 	}
 
 	/** What the final pass needs to expand the world of the frame being shown. */
-	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping, boolean additiveOverlay) {
+	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping, boolean additiveOverlay, int vignetteColor) {
 	}
 
 	/**
@@ -185,7 +199,7 @@ public final class HdrExpandPass {
 		if (current == null || !current.expandable() || view == null || shown.texture() != current.target()) {
 			return null;
 		}
-		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping(), additiveOverlay);
+		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping(), additiveOverlay, vignetteColor);
 	}
 
 	/**

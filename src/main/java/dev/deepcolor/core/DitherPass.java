@@ -21,8 +21,10 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.ARGB;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -38,7 +40,8 @@ import org.lwjgl.system.MemoryUtil;
  * this pass converts the image to absolute brightness. See {@link Hdr}.
  */
 public final class DitherPass {
-	private static final int PUSH_CONSTANT_SIZE = 80;
+	private static final int PUSH_CONSTANT_SIZE = 96;
+	private static final Identifier VIGNETTE = Identifier.withDefaultNamespace("textures/misc/vignette.png");
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
 	/** For tests: makes every run of the pass fail, as a shader that does not compile would. */
@@ -47,6 +50,7 @@ public final class DitherPass {
 		.withUniform("InSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("NoiseSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("WorldSampler", UniformType.COMBINED_IMAGE_SAMPLER)
+		.withUniform("VignetteSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.build();
 
 	private static final RenderPipeline PIPELINE_8 = createPipeline("pipeline/dither_8", GpuFormat.RGBA8_UNORM);
@@ -221,6 +225,11 @@ public final class DitherPass {
 			HdrExpandPass.Expansion expand = hdrActive ? expansion : null;
 			// Every sampler must be bound; the noise stands in when there is no world to expand.
 			pass.setUniform("WorldSampler", expand != null ? expand.world() : noiseView, nearest);
+			// The vignette texture, sampled the way the game draws it, to divide the vignette out.
+			AbstractTexture vignette = expand != null && expand.vignetteColor() != 0
+				? Minecraft.getInstance().getTextureManager().getTexture(VIGNETTE) : null;
+			boolean vignetteBound = vignette != null;
+			pass.setUniform("VignetteSampler", vignetteBound ? vignette.getTextureView() : noiseView, vignetteBound ? vignette.getSampler() : nearest);
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
@@ -243,6 +252,10 @@ public final class DitherPass {
 				constants.putFloat(expand != null ? expand.exponent() : 0.0F);
 				constants.putInt(expand == null ? 0 : expand.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
 				constants.putInt(expand != null && expand.additiveOverlay() ? 1 : 0);
+				int tint = vignetteBound ? expand.vignetteColor() : 0;
+				constants.putFloat(ARGB.red(tint) / 255.0F);
+				constants.putFloat(ARGB.green(tint) / 255.0F);
+				constants.putFloat(ARGB.blue(tint) / 255.0F);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

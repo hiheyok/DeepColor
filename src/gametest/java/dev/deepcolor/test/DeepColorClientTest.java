@@ -646,10 +646,16 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
 		double distortion = context.computeOnClient(minecraft -> minecraft.options.screenEffectScale().get());
 		boolean vignette = context.computeOnClient(minecraft -> minecraft.options.vignette().get());
+		float brightness = context.computeOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness);
+		// The probe reads red only. A gamut stretch mixes channels with negative weights (BT.2020
+		// takes about 0.6x green from red), so with nausea's green-tinted light a red-only ratio
+		// would not compare with peak / UI. The expansion itself runs before the stretch.
+		float gamut = config.hdrGamutStretch;
 		try {
 			context.runOnClient(minecraft -> {
 				minecraft.options.screenEffectScale().set(0.0);
 				minecraft.options.vignette().set(false);
+				config.hdrGamutStretch = 0.0F;
 			});
 			world.getServer().runCommand("effect give @p minecraft:nausea 30 0 true");
 			world.getConnection().waitForClientboundPackets();
@@ -673,6 +679,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				Math.abs(ui.value(ui.width() * 3 / 4, ui.height() / 2) / white - 1.0) < 0.01
 					&& ui.value(ui.width() / 4, ui.height() / 2) == 0.0F);
 			context.setScreen(() -> null);
+			// With the vignette as well: nausea's colored light makes the pixel uneven, which must
+			// not drop the vignette's darkening and expand the dark corners at full brightness.
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(true));
+			double cornerNone = this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			double cornerLinear = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			double cornerGain = cornerLinear / cornerNone;
+			this.check(String.format(Locale.ROOT, "nausea under a full-strength vignette keeps the corners within the Linear gain (%.2fx of %.2fx)", cornerGain, expected),
+				cornerGain > 1.5 && cornerGain < expected * 1.05);
 		} finally {
 			context.setScreen(() -> null);
 			world.getServer().runCommand("effect clear @p minecraft:nausea");
@@ -681,7 +695,9 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			context.runOnClient(minecraft -> {
 				minecraft.options.screenEffectScale().set(distortion);
 				minecraft.options.vignette().set(vignette);
+				minecraft.gui.hud.vignetteBrightness = brightness;
 				config.hdrMapping = mapping;
+				config.hdrGamutStretch = gamut;
 			});
 		}
 	}
