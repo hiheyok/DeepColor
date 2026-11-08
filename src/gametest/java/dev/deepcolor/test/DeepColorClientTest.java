@@ -575,9 +575,35 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			context.getInput().pressKey(InputConstants.KEY_P);
 			context.waitTicks(3);
 			context.takeScreenshot("02e_live_probe");
+			context.runOnClient(minecraft -> {
+				var slider = (net.minecraft.client.gui.components.AbstractSliderButton) screen.children().stream()
+					.filter(child -> child instanceof net.minecraft.client.gui.components.AbstractSliderButton widget
+						&& widget.getMessage().getString().startsWith("White:"))
+					.findFirst().orElseThrow();
+				var mouse = new net.minecraft.client.input.MouseButtonInfo(0, 0);
+				double left = slider.getX() + 4.0;
+				double span = slider.getWidth() - 8.0;
+				double y = slider.getY() + 10.0;
+				slider.onClick(new net.minecraft.client.input.MouseButtonEvent(left + span, y, mouse), false);
+				this.check("White slider selects maximum manual brightness", config.hdrUiNits == DeepColorConfig.MAX_UI_NITS);
+				slider.onClick(new net.minecraft.client.input.MouseButtonEvent(left + span / (DeepColorConfig.MAX_UI_NITS - DeepColorConfig.MIN_UI_NITS + 1), y, mouse), false);
+				this.check("White slider has a separate minimum manual brightness position", config.hdrUiNits == DeepColorConfig.MIN_UI_NITS);
+				slider.onClick(new net.minecraft.client.input.MouseButtonEvent(left, y, mouse), false);
+				this.check("White slider restores Auto at its left endpoint", config.hdrUiNits == 0);
+				this.check("White slider labels Auto without a nits suffix", slider.getMessage().getString().equals("White: Auto"));
+			});
 			context.getInput().pressKey(InputConstants.KEY_C);
 			context.waitTicks(3);
 			this.check("hiding calibration restores full-size gradient", screen.calibrationPanelFraction() == 0);
+			try {
+				var saved = com.google.gson.JsonParser.parseString(Files.readString(FabricLoader.getInstance().getConfigDir().resolve("deepcolor.json"))).getAsJsonObject();
+				this.check("Auto interface brightness is saved after calibration", saved.get("hdrUiNits").getAsInt() == 0);
+			} catch (IOException e) { throw new RuntimeException(e); }
+			context.getInput().pressKey(InputConstants.KEY_C);
+			context.waitTicks(3);
+			this.check("reopening calibration preserves Auto interface brightness", config.hdrUiNits == 0
+				&& context.computeOnClient(minecraft -> screen.children().stream().anyMatch(child -> child instanceof AbstractWidget widget
+					&& widget.getMessage().getString().equals("White: Auto"))));
 		} finally {
 			context.runOnClient(minecraft -> {
 				config.hdrShadowFloor = floor;

@@ -186,7 +186,7 @@ previous output exactly.
 
 **Calibrating while viewing the ramp.** In **Open gradient test**, press **C** or click **Calibrate**.
 The game-shadow ramp stays visible above controls for gamma, floor, noise, contrast, contrast range
-and interface white. Dither, noise animation and **Floor dither** can be toggled here too. Values
+and interface white (Auto, then 40–600 nits). Dither, noise animation and **Floor dither** can be toggled here too. Values
 apply live and are saved when hiding the controls or leaving the screen. Keys 1–5 still switch test
 patterns; press C again to view the full-size ramp. RGB 0–32 covers only dark shades, so its right
 edge is dark grey. Key 5 is a separate chart that includes white.

@@ -63,7 +63,7 @@
 	"deepcolor.option.hdr_shadow_contrast_range.value": "Range: %s nits",
 	"deepcolor.option.hdr_shadow_contrast_range.tooltip": "Brightness below which Near-black contrast acts. The correction fades smoothly to zero at this level. Lower values target only the darkest tones; higher values affect more of the shadows. Uses nominal nits on macOS, relative to display brightness. Applied after Shadow floor and before HDR shadow noise. Applies immediately.",
 	"deepcolor.gradient.animate": "Animate",
-	"deepcolor.option.hdr_ui_nits.value": "White: %s nits",
+	"deepcolor.option.hdr_ui_nits.value": "White: %s",
 	"deepcolor.gradient.calibrate": "Calibrate (C)",
 	"deepcolor.gradient.hide_controls": "Hide controls (C)",
 	"deepcolor.gradient.smooth_shadows": "Smooth shadows",

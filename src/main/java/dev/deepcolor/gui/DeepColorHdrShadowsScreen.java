@@ -55,7 +55,7 @@ public final class DeepColorHdrShadowsScreen extends Screen {
 		NOISE("hdr_shadow_dither", (int) (DeepColorConfig.MAX_HDR_SHADOW_DITHER * 2)),
 		GAMMA("hdr_gamma", Math.round((DeepColorConfig.MAX_GAMMA - DeepColorConfig.MIN_GAMMA) * 20) + 1),
 		FLOOR("hdr_shadow_floor", DeepColorConfig.SHADOW_FLOOR_STEPS.length - 1),
-		WHITE("hdr_ui_nits", DeepColorConfig.MAX_UI_NITS - DeepColorConfig.MIN_UI_NITS);
+		WHITE("hdr_ui_nits", DeepColorConfig.MAX_UI_NITS - DeepColorConfig.MIN_UI_NITS + 1);
 
 		final String key;
 		final int steps;
@@ -73,7 +73,8 @@ public final class DeepColorHdrShadowsScreen extends Screen {
 				return config.hdrShadowDither / DeepColorConfig.MAX_HDR_SHADOW_DITHER;
 			}
 			if (this == WHITE) {
-				return (Math.max(DeepColorConfig.MIN_UI_NITS, config.hdrUiNits) - DeepColorConfig.MIN_UI_NITS) / (double) this.steps;
+				// Position zero is Auto; manual brightness starts at position one.
+				return config.hdrUiNits == 0 ? 0.0 : (config.hdrUiNits - DeepColorConfig.MIN_UI_NITS + 1) / (double) this.steps;
 			}
 			if (this == GAMMA) {
 				return config.hdrGamma == 0 ? 0 : (Math.round((config.hdrGamma - DeepColorConfig.MIN_GAMMA) * 20) + 1) / (double) this.steps;
@@ -110,7 +111,7 @@ public final class DeepColorHdrShadowsScreen extends Screen {
 				case RANGE -> Component.literal(new java.math.BigDecimal(Float.toString(this.config.hdrShadowContrastRange)).stripTrailingZeros().toPlainString());
 				case GAMMA -> this.config.hdrGamma == 0 ? Component.translatable("deepcolor.option.hdr_gamma.srgb")
 					: Component.literal(String.format(Locale.ROOT, "%.2f", this.config.hdrGamma));
-				case WHITE -> this.config.hdrUiNits == 0 ? Component.translatable("deepcolor.option.nits.auto") : Component.literal(String.valueOf(this.config.hdrUiNits));
+				case WHITE -> this.config.hdrUiNits == 0 ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", this.config.hdrUiNits);
 				case FLOOR -> Component.literal(new java.math.BigDecimal(Float.toString(this.config.hdrShadowFloor)).stripTrailingZeros().toPlainString());
 				case NOISE -> this.config.hdrShadowDither == 0 ? Component.translatable("deepcolor.option.hdr_shadow_floor.off")
 					: Component.literal(String.format(Locale.ROOT, "%.1f", this.config.hdrShadowDither));
@@ -127,7 +128,7 @@ public final class DeepColorHdrShadowsScreen extends Screen {
 				case NOISE -> this.config.hdrShadowDither = step / 2.0F;
 				case GAMMA -> this.config.hdrGamma = step == 0 ? 0 : DeepColorConfig.MIN_GAMMA + (step - 1) / 20.0F;
 				case FLOOR -> this.config.hdrShadowFloor = DeepColorConfig.SHADOW_FLOOR_STEPS[step];
-				case WHITE -> this.config.hdrUiNits = DeepColorConfig.MIN_UI_NITS + step;
+				case WHITE -> this.config.hdrUiNits = step == 0 ? 0 : DeepColorConfig.MIN_UI_NITS + step - 1;
 			}
 		}
 	}
