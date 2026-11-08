@@ -56,6 +56,14 @@ public final class MacEdr {
 				return false;
 			}
 			long msgSend = ObjCRuntime.getLibrary().getFunctionAddress("objc_msgSend");
+			// The view accepts the EDR flag on any Mac, so reading it back proves nothing. What counts
+			// is whether a screen can show values above SDR white at all. Any screen, not just the
+			// window's: the game opens on the primary display and may be moved to an HDR one.
+			double potential = maximumPotentialEdr(msgSend);
+			if (potential <= 1.0) {
+				DeepColor.LOGGER.info("HDR output: no screen can show EDR (potential headroom {}), keeping the OpenGL view SDR", potential);
+				return false;
+			}
 			long view = JNI.invokePPP(nsWindow, sel("contentView"), msgSend);
 			long setWants = sel("setWantsExtendedDynamicRangeOpenGLSurface:");
 			if (view == 0L || (JNI.invokePPPP(view, sel("respondsToSelector:"), setWants, msgSend) & 0xFF) == 0) {
@@ -84,7 +92,8 @@ public final class MacEdr {
 				DeepColor.LOGGER.warn("HDR output: could not wrap the extended linear sRGB color space");
 				return false;
 			}
-			// The current color space, kept alive until EDR is known to be on.
+			// The current color space, kept alive until EDR is known to be on. It may be nil, which
+			// is then what gets put back.
 			long previous = JNI.invokePPP(nsWindow, sel("colorSpace"), msgSend);
 			if (previous != 0L) {
 				JNI.invokePPP(previous, sel("retain"), msgSend);
@@ -98,7 +107,7 @@ public final class MacEdr {
 				JNI.invokePPV(view, setWants, true, msgSend);
 				on = (JNI.invokePPP(view, sel("wantsExtendedDynamicRangeOpenGLSurface"), msgSend) & 0xFF) != 0;
 			} finally {
-				if (!on && previous != 0L) {
+				if (!on) {
 					JNI.invokePPPV(nsWindow, sel("setColorSpace:"), previous, msgSend);
 				}
 				if (previous != 0L) {
@@ -115,6 +124,25 @@ public final class MacEdr {
 			DeepColor.LOGGER.error("HDR output: could not enable EDR for the OpenGL view", e);
 			return false;
 		}
+	}
+
+	/** The highest maximumPotentialExtendedDynamicRangeColorComponentValue of all screens, 1 if none. */
+	private static double maximumPotentialEdr(long msgSend) {
+		long screens = JNI.invokePPP(ObjCRuntime.objc_getClass("NSScreen"), sel("screens"), msgSend);
+		if (screens == 0L) {
+			return 1.0;
+		}
+		long count = JNI.invokePPP(screens, sel("count"), msgSend);
+		long potentialSelector = sel("maximumPotentialExtendedDynamicRangeColorComponentValue");
+		double best = 1.0;
+		for (long i = 0; i < count; i++) {
+			long screen = JNI.invokePPPP(screens, sel("objectAtIndex:"), i, msgSend);
+			if (screen != 0L && (JNI.invokePPPP(screen, sel("respondsToSelector:"), potentialSelector, msgSend) & 0xFF) != 0) {
+				// CGFloat is a double on every 64-bit Mac, returned in a float register by objc_msgSend.
+				best = Math.max(best, JNI.invokePPD(screen, potentialSelector, msgSend));
+			}
+		}
+		return best;
 	}
 
 	private static long sel(String name) {

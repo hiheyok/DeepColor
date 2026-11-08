@@ -206,26 +206,32 @@ vec3 expandWorld(vec3 world) {
 // by much. A dark tooltip over a bright sky fails that and is left alone instead of glowing, and so
 // does an overlay that tints the world unevenly (whose highlights would otherwise change color).
 vec3 withExpandedWorld(vec3 current, float alpha) {
-    vec3 world = texture(WorldSampler, texCoord).rgb;
-    world = mix(max(world, 0.0), vec3(0.0), notEqual(world, world));
-    float worldShare = 1.0 - clamp(alpha, 0.0, 1.0);
+    vec4 copy = texture(WorldSampler, texCoord);
+    vec3 world = mix(max(copy.rgb, 0.0), vec3(0.0), notEqual(copy.rgb, copy.rgb));
+    // The copy's alpha is 0 for world. Behind a blurred menu it is where interface drawn before the
+    // blur was smeared into the copy; that is not world and is left as it is.
+    float blurredInterface = clamp(copy.a, 0.0, 1.0);
+    float worldShare = (1.0 - clamp(alpha, 0.0, 1.0)) * (1.0 - smoothstep(0.0, 0.05, blurredInterface));
     vec3 shareOfWorld = world * worldShare;
     float worldLuminance = dot(shareOfWorld, LUMA);
     if (worldLuminance <= 1e-4) {
         return current;
     }
-    // Darkening of the world itself, found from how much darker the pixel is than the world share.
-    // Interface that adds light makes this 1 or more, which counts as no darkening.
-    float darkening = clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0);
+    float darkening = 1.0;
     float trust = 1.0;
     if (alpha < 0.02) {
+        // Pure world by alpha. Darkening that left alpha alone (the vignette) is found by comparing
+        // with the copy, and must be the same in every channel and less than about half.
+        darkening = clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0);
         vec3 usable = step(vec3(0.002), shareOfWorld);
         vec3 ratio = max(current, 0.0) / max(shareOfWorld, vec3(0.002));
         vec3 spread = abs(ratio - darkening) * usable;
         bool even = max(spread.r, max(spread.g, spread.b)) <= 0.03 + 0.03 * darkening;
-        // The vignette darkens by well under half; anything darker is not the world showing through.
         trust = even ? smoothstep(0.35, 0.6, darkening) : 0.0;
     }
+    // Interface blended over the world (alpha above 0) needs no estimate: with normal blending the
+    // expanded image differs from the current one by exactly the world share times the expansion.
+    // Estimating darkening there would count the interface's own light as world.
     return current + trust * worldShare * darkening * (expandWorld(world) - world);
 }
 

@@ -65,10 +65,30 @@ public final class DitherPass {
 
 	/** Returns the view to present: the dither target, or the input if there is nothing to do. */
 	public static GpuTextureView apply(GpuTextureView source) {
-		if (failed) {
-			OutputProbe.onFramePresented(null, OutputState.bits());
-			return source;
+		// Whatever path this takes, a waiting probe gets its answer: the target, or null.
+		try {
+			if (failed) {
+				// A frame may have marked its world with alpha 0 before the pass failed elsewhere (in
+				// a screenshot, say). It is shown as is, so it must be opaque.
+				HdrExpandPass.restoreOpaque();
+				return source;
+			}
+			return applyPass(source);
+		} finally {
+			GpuTexture presented = lastPresented;
+			lastPresented = null;
+			try {
+				OutputProbe.onFramePresented(presented, OutputState.bits());
+			} catch (RuntimeException e) {
+				DeepColor.LOGGER.warn("Output probe failed", e);
+			}
 		}
+	}
+
+	/** The dither target, when the pass ran for the frame being shown. */
+	private static @Nullable GpuTexture lastPresented;
+
+	private static GpuTextureView applyPass(GpuTextureView source) {
 		try {
 			OutputState.initialize();
 			Hdr.logChanges();
@@ -78,7 +98,6 @@ public final class DitherPass {
 			GpuFormat outputFormat = OutputState.isScrgb() ? GpuFormat.RGBA16_FLOAT : formatForBits(bits);
 			// scRGB always needs the pass: it is what turns the image into absolute brightness.
 			if (!OutputState.isScrgb() && !config.dither && gradientMode == 0 && source.texture().getFormat() == outputFormat) {
-				OutputProbe.onFramePresented(null, bits);
 				return source;
 			}
 
@@ -96,7 +115,7 @@ public final class DitherPass {
 			GpuTextureView world = HdrExpandPass.takeWorldForFrame(source);
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
 				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? world : null);
-			OutputProbe.onFramePresented(target, bits);
+			lastPresented = target;
 			return Objects.requireNonNull(targetView);
 		} catch (RuntimeException e) {
 			// Presenting the undithered image is always possible, so never let this take the game down.
@@ -104,7 +123,6 @@ public final class DitherPass {
 			DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
 			// The world may already be marked with alpha 0 for this frame, which is now shown as is.
 			HdrExpandPass.restoreOpaque();
-			OutputProbe.onFramePresented(null, OutputState.bits());
 			return source;
 		}
 	}
@@ -156,6 +174,9 @@ public final class DitherPass {
 				pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 				pass.draw(3, 1, 0, 0);
 			}
+			// The copy keeps alpha, and with HDR on the world's alpha is 0. Vanilla screenshots force
+			// opacity, but other readers of this copy should not get a transparent world.
+			HdrExpandPass.makeOpaque(destination);
 			return flattened;
 		} catch (RuntimeException e) {
 			// A wrong-looking screenshot is still better than a crash.

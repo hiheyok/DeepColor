@@ -38,13 +38,8 @@ public final class HdrExpandPass {
 		.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
 		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALPHA))
 		.build();
-	private static final RenderPipeline MARK_OPAQUE = RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
-		.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "pipeline/opaque_alpha"))
-		.withVertexShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "fullscreen"))
-		.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "opaque_alpha"))
-		.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALPHA))
-		.build();
+	private static final RenderPipeline MARK_OPAQUE = opaquePipeline("pipeline/opaque_alpha", GpuFormat.RGBA16_FLOAT);
+	private static final RenderPipeline MARK_OPAQUE_8 = opaquePipeline("pipeline/opaque_alpha_8", GpuFormat.RGBA8_UNORM);
 
 	/** The world as it was when the interface started drawing. */
 	private static @Nullable GpuTexture world;
@@ -106,11 +101,13 @@ public final class HdrExpandPass {
 				world = device.createTexture(() -> "Deep Color world for HDR expansion", WORLD_USAGE, GpuFormat.RGBA16_FLOAT, width, height, 1, 1);
 				worldView = device.createTextureView(world);
 			}
-			device.createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, width, height);
 			try (RenderPass pass = device.createCommandEncoder().createRenderPass(() -> "Deep Color mark world", colorView, Optional.empty())) {
 				pass.setPipeline(ModPipelines.get(MARK_WORLD));
 				pass.draw(3, 1, 0, 0);
 			}
+			// Copied after marking, so the copy's alpha is 0 too. After a menu blur the copy is
+			// replaced and its alpha then says where interface was blurred into it (see afterBlur).
+			device.createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, width, height);
 			pending = true;
 			marked = true;
 			markedTarget = color;
@@ -126,7 +123,9 @@ public final class HdrExpandPass {
 	/**
 	 * After the menu blur, which blurs the main target in place: the world copy no longer lines up
 	 * with it, so the blurred image becomes the world copy. Its alpha is blurred too, so the world
-	 * stays marked, and the world behind the menu keeps its HDR brightness.
+	 * stays marked, and the world behind the menu keeps its HDR brightness. Interface drawn before
+	 * the blur (hotbar, chat, crosshair) is blurred into the copy as well; the copy's alpha says
+	 * where, and the final pass leaves those pixels unexpanded so blurred interface cannot glow.
 	 */
 	public static void afterBlur(RenderTarget main) {
 		GpuTexture color = main.getColorTexture();
@@ -162,12 +161,31 @@ public final class HdrExpandPass {
 		}
 		pending = false;
 		marked = false;
-		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color restore alpha", markedView, Optional.empty())) {
-			pass.setPipeline(ModPipelines.get(MARK_OPAQUE));
+		makeOpaque(markedView);
+	}
+
+	/** Sets alpha to 1 everywhere, leaving color alone. For RGBA16_FLOAT and RGBA8_UNORM views. */
+	static void makeOpaque(GpuTextureView view) {
+		GpuFormat format = view.texture().getFormat();
+		if (format != GpuFormat.RGBA16_FLOAT && format != GpuFormat.RGBA8_UNORM) {
+			return;
+		}
+		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color opaque alpha", view, Optional.empty())) {
+			pass.setPipeline(ModPipelines.get(format == GpuFormat.RGBA8_UNORM ? MARK_OPAQUE_8 : MARK_OPAQUE));
 			pass.draw(3, 1, 0, 0);
 		} catch (RuntimeException e) {
-			DeepColor.LOGGER.error("Could not make the image opaque again", e);
+			DeepColor.LOGGER.error("Could not make the image opaque", e);
 		}
+	}
+
+	private static RenderPipeline opaquePipeline(String location, GpuFormat format) {
+		return RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
+			.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, location))
+			.withVertexShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "fullscreen"))
+			.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "opaque_alpha"))
+			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+			.withColorTargetState(new ColorTargetState(Optional.empty(), format, ColorTargetState.WRITE_ALPHA))
+			.build();
 	}
 
 	static float boost() {
