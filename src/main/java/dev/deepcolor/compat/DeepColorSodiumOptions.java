@@ -112,7 +112,7 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 						.setRange(0, 100, 5)
 						.setValueFormatter(percent -> Component.literal(percent == 0 ? "sRGB" : percent + "%"))
 						.setDefaultValue(0)
-						.setBinding(percent -> config.hdrGamutStretch = percent / 100.0F, () -> Math.round(config.hdrGamutStretch * 100))
+						.setBinding(percent -> config.hdrGamutStretch = percent / 100.0F, () -> snap(Math.round(config.hdrGamutStretch * 100), 0, 100, 5))
 						.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 						.setStorageHandler(config::save))));
 	}
@@ -160,9 +160,20 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 			.setDefaultValue(220)
 			.setBinding(
 				value -> config.hdrGamma = value <= srgb ? DeepColorConfig.SRGB_CURVE : value / 100.0F,
-				() -> config.hdrGamma == DeepColorConfig.SRGB_CURVE ? srgb : Math.round(config.hdrGamma * 100))
+				() -> config.hdrGamma == DeepColorConfig.SRGB_CURVE ? srgb : snap(Math.round(config.hdrGamma * 100), min, Math.round(DeepColorConfig.MAX_GAMMA * 100), 5))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 			.setStorageHandler(config::save);
+	}
+
+	/**
+	 * The nearest slider position to a config value. The config accepts any value in range (123 nits,
+	 * gamma 2.23), but Sodium checks a loaded value against the slider's steps and saves the default
+	 * over any value that is not on one. Showing the nearest step instead keeps the config value as it
+	 * is: Sodium only writes an option back when the slider is moved.
+	 */
+	static int snap(int value, int min, int max, int step) {
+		int steps = Math.round((Math.clamp(value, min, max) - min) / (float) step);
+		return min + steps * step;
 	}
 
 	private static boolean hdrOn(net.caffeinemc.mods.sodium.api.config.ConfigState state) {
@@ -183,7 +194,7 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 			.setRange(auto, max, step)
 			.setValueFormatter(value -> value <= auto ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", value))
 			.setDefaultValue(defaultNits == 0 ? auto : defaultNits)
-			.setBinding(value -> setter.accept(value <= auto ? 0 : value), () -> getter.get() == 0 ? auto : getter.get())
+			.setBinding(value -> setter.accept(value <= auto ? 0 : value), () -> getter.get() == 0 ? auto : snap(getter.get(), min, max, step))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 			.setStorageHandler(config::save);
 	}

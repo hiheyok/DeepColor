@@ -5,6 +5,7 @@ import com.mojang.renderpearl.api.GpuFormat;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
 import dev.deepcolor.core.Formats;
+import dev.deepcolor.core.DitherPass;
 import dev.deepcolor.core.Hdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
@@ -49,6 +50,11 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		context.waitTicks(10);
 		if (DeepColor.isDisabledByHdrMod()) {
 			this.checkDisabled(context);
+			this.finish(context);
+			return;
+		}
+		if (Boolean.getBoolean("deepcolor.test.failDither")) {
+			this.checkDitherFailure(context);
 			this.finish(context);
 			return;
 		}
@@ -167,6 +173,71 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		context.takeScreenshot("01b_sodium");
 		context.setScreen(() -> new TitleScreen());
 		context.waitTicks(3);
+
+		// Valid config values between slider steps. Sodium replaces any value its validator rejects
+		// with the default while building the screen, so they must survive opening it.
+		DeepColorConfig config = DeepColorConfig.get();
+		int uiNits = config.hdrUiNits;
+		int peakNits = config.hdrPeakNits;
+		float gamma = config.hdrGamma;
+		float gamut = config.hdrGamutStretch;
+		context.runOnClient(minecraft -> {
+			config.hdrUiNits = 123;
+			config.hdrPeakNits = 333;
+			config.hdrGamma = 2.23F;
+			config.hdrGamutStretch = 0.33F;
+		});
+		context.setScreen(() -> {
+			try {
+				Class<?> screen = Class.forName("net.caffeinemc.mods.sodium.client.gui.VideoSettingsScreen");
+				return (net.minecraft.client.gui.screens.Screen) screen.getMethod("createScreen", net.minecraft.client.gui.screens.Screen.class).invoke(null, (Object) null);
+			} catch (ReflectiveOperationException e) {
+				throw new RuntimeException(e);
+			}
+		});
+		context.waitTicks(5);
+		context.setScreen(() -> new TitleScreen());
+		context.waitTicks(3);
+		String kept = context.computeOnClient(minecraft -> String.format(Locale.ROOT, "UI %d, peak %d, gamma %.2f, gamut %.2f",
+			config.hdrUiNits, config.hdrPeakNits, config.hdrGamma, config.hdrGamutStretch));
+		this.check("Sodium page keeps HDR values between slider steps (" + kept + ")", kept.equals("UI 123, peak 333, gamma 2.23, gamut 0.33"));
+		context.runOnClient(minecraft -> {
+			config.hdrUiNits = uiNits;
+			config.hdrPeakNits = peakNits;
+			config.hdrGamma = gamma;
+			config.hdrGamutStretch = gamut;
+			config.save();
+		});
+	}
+
+	/**
+	 * With the dither pass broken, the game must keep running on the plain image, and screenshots
+	 * (F2, world icons) must still work instead of hitting the same failure.
+	 */
+	private void checkDitherFailure(ClientGameTestContext context) {
+		context.waitTicks(10);
+		this.check("dither pass switched itself off after failing", context.computeOnClient(minecraft -> DitherPass.failed()));
+		this.check("screenshot of the title screen works without the dither pass", hasDetail(screenshot(context, "01_failed_title")));
+		try (TestSingleplayerContext world = context.worldBuilder().create()) {
+			world.getConnection().waitForChunksRender();
+			context.waitTicks(5);
+			this.check("screenshot of the world works without the dither pass", hasDetail(screenshot(context, "02_failed_world")));
+		}
+		this.check("game still running after leaving the world", context.computeOnClient(minecraft -> minecraft.isRunning()));
+	}
+
+	/** A real image, as opposed to one solid color from a failed conversion. */
+	private static boolean hasDetail(BufferedImage image) {
+		if (image == null) {
+			return false;
+		}
+		Set<Integer> colors = new HashSet<>();
+		for (int y = 0; y < image.getHeight(); y += 4) {
+			for (int x = 0; x < image.getWidth(); x += 4) {
+				colors.add(image.getRGB(x, y));
+			}
+		}
+		return colors.size() > 50;
 	}
 
 	/** A resource reload closes and recompiles every pipeline. The router must not keep the old ones. */
@@ -487,6 +558,10 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			context.waitTicks(3);
 			OutputProbe.Capture full = capture(context, OutputProbe::captureDitherTarget);
 			this.log("full-screen strip " + strip + ": " + distinctInRow(full, full.height() / 2) + " distinct codes");
+			if (strip == 3) {
+				double darkBias = darkEndBias(full, ditherBits);
+				this.check(String.format(Locale.ROOT, "dither keeps the darkest shades at their true level (%+.3f LSB)", darkBias), Math.abs(darkBias) < 0.03);
+			}
 		}
 		context.runOnClient(minecraft -> screen.select(-1));
 		context.waitTicks(3);
@@ -584,6 +659,35 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			levels.add(target.code(x, row));
 		}
 		return levels.size() >= 16;
+	}
+
+	/**
+	 * Average offset, in dither steps, of the dithered ramp within its first step above black:
+	 * columns averaged over the middle of the screen, away from the labels. Within that step the old
+	 * noise fade read about 0.08 steps too dark, and anything below a quarter step went to black.
+	 * Taken signed, so the row-to-row noise of a single frame averages out across the columns.
+	 */
+	private static double darkEndBias(OutputProbe.Capture capture, int ditherBits) {
+		float scale = (1 << capture.bits()) - 1;
+		float levels = (1 << ditherBits) - 1;
+		double bias = 0.0;
+		int counted = 0;
+		// The ramp starts with a sliver of true black (BLACK_EDGE in dither.fsh), which is left out.
+		for (int x = (int) Math.ceil(capture.width() * 0.004) + 1; ; x++) {
+			double ideal = (x + 0.5) / capture.width() * 32.0 / 255.0 * levels;
+			if (ideal >= 1.0) {
+				break;
+			}
+			double sum = 0.0;
+			int samples = 0;
+			for (int y = capture.height() / 5; y < capture.height() * 4 / 5; y++) {
+				sum += Math.floor(capture.code(x, y) * levels / scale + 1e-9);
+				samples++;
+			}
+			bias += sum / samples - ideal;
+			counted++;
+		}
+		return counted == 0 ? 0.0 : bias / counted;
 	}
 
 	private static boolean blackColumnIsZero(OutputProbe.Capture capture, int[] rows) {

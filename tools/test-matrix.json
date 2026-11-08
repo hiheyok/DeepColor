@@ -151,6 +151,22 @@
 			}
 		},
 		{
+			"name": "gl-dither-fail",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.failDither=true"
+			]
+		},
+		{
+			"name": "vk-dither-fail",
+			"backend": "vulkan",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.failDither=true"
+			]
+		},
+		{
 			"name": "vk-static",
 			"backend": "vulkan",
 			"mods": "vanilla",

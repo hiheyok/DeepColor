@@ -22,6 +22,7 @@ import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
+import org.joml.Vector4f;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -40,6 +41,8 @@ public final class DitherPass {
 	private static final int PUSH_CONSTANT_SIZE = 64;
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
+	/** For tests: makes every run of the pass fail, as a shader that does not compile would. */
+	private static final boolean SIMULATE_FAILURE = Boolean.getBoolean("deepcolor.test.failDither");
 	private static final BindGroupLayout SAMPLERS = BindGroupLayout.builder()
 		.withUniform("InSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("NoiseSampler", UniformType.COMBINED_IMAGE_SAMPLER)
@@ -96,9 +99,18 @@ public final class DitherPass {
 		}
 	}
 
+	/** True once the pass has failed and switched itself off. */
+	public static boolean failed() {
+		return failed;
+	}
+
 	/**
 	 * Returns an RGBA8 copy of a target, for code that reads pixels back as RGBA8. Readbacks are
 	 * queued in order, so one reused target is safe even with several captures in a frame.
+	 *
+	 * <p>Screenshots and world icons come through here, so it follows the same rule as {@link #apply}:
+	 * a failing dither pass must never take the game down. Once the pass has failed, the copy is made
+	 * with the game's own blit, which only lacks the dither.
 	 */
 	public static RenderTarget flattenForReadback(RenderTarget target) {
 		GpuTextureView source = target.getColorTextureView();
@@ -111,9 +123,27 @@ public final class DitherPass {
 			}
 			flattened = new TextureTarget("Deep Color readback", target.width, target.height, GpuFormat.RGBA8_UNORM, null);
 		}
-		DeepColorConfig config = DeepColorConfig.get();
-		render(source, Objects.requireNonNull(flattened.getColorTextureView()), Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
-		return flattened;
+		GpuTextureView destination = Objects.requireNonNull(flattened.getColorTextureView());
+		if (!failed) {
+			try {
+				DeepColorConfig config = DeepColorConfig.get();
+				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
+				return flattened;
+			} catch (RuntimeException e) {
+				failed = true;
+				DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
+			}
+		}
+		try {
+			// The blit blends, so start from opaque black: the copy then matches the target exactly.
+			RenderSystem.getDevice().createCommandEncoder().clearColorTexture(flattened.getColorTexture(), new Vector4f(0.0F, 0.0F, 0.0F, 1.0F));
+			target.blitAndBlendToTexture(destination, null);
+			return flattened;
+		} catch (RuntimeException e) {
+			// A wrong-looking screenshot is still better than a crash.
+			DeepColor.LOGGER.error("Could not convert the image to RGBA8 for a screenshot", e);
+			return target;
+		}
 	}
 
 	private static float lsb(int bits) {
@@ -135,6 +165,9 @@ public final class DitherPass {
 	}
 
 	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode) {
+		if (SIMULATE_FAILURE) {
+			throw new IllegalStateException("Simulated dither pass failure (deepcolor.test.failDither)");
+		}
 		ensureNoise();
 		var compiled = ModPipelines.get(output.pipeline);
 		DeepColorConfig config = DeepColorConfig.get();
