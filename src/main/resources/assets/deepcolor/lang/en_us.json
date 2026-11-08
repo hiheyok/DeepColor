@@ -66,6 +66,7 @@
 	"deepcolor.option.hdr_gamut_target.bt_2020": "BT.2020",
 
 	"deepcolor.gradient.measure_float": "Float (HDR) output is not quantized, so there are no levels to count. Measuring needs SDR output.",
+	"deepcolor.gradient.measure_no_target": "Dither target: none this frame (the dither pass is off or has failed)",
 	"deepcolor.gradient.measure_no_back_buffer": "Back buffer: not readable on Vulkan (swapchain images cannot be copied)",
 	"deepcolor.gradient.help": "0: all strips   1-4: one strip   5: grey steps   P: measure   Esc: close",
 	"deepcolor.gradient.steps": "Grey steps (8-bit shades), identical in SDR and HDR. Photograph both with the same camera settings.",

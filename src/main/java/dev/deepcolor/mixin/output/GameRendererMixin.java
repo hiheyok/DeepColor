@@ -20,4 +20,9 @@ abstract class GameRendererMixin {
 	private void deepcolor$expandWorldBrightness(CallbackInfo ci) {
 		HdrExpandPass.apply(((GameRenderer) (Object) this).mainRenderTarget());
 	}
+
+	@Inject(method = "processBlurEffect", at = @At("HEAD"))
+	private void deepcolor$blur(CallbackInfo ci) {
+		HdrExpandPass.onBlur();
+	}
 }

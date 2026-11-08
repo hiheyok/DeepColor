@@ -28,6 +28,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -38,6 +39,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
@@ -247,6 +249,16 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	private void checkDitherFailure(ClientGameTestContext context) {
 		context.waitTicks(10);
 		this.check("dither pass switched itself off after failing", context.computeOnClient(minecraft -> DitherPass.failed()));
+		// A request for the dither target must still be answered, or the gradient screen's measure
+		// key (and anything else waiting) would wait forever.
+		AtomicReference<String> answer = new AtomicReference<>();
+		context.runOnClient(minecraft -> OutputProbe.captureDitherTarget(capture -> answer.set(capture == null ? "none" : "a capture")));
+		try {
+			context.waitFor(minecraft -> answer.get() != null, 60);
+		} catch (AssertionError timedOut) {
+			// Reported by the check below.
+		}
+		this.check("dither target request is answered without a capture (" + answer.get() + ")", "none".equals(answer.get()));
 		this.checkScreenshotColor(context);
 		this.check("screenshot of the title screen works without the dither pass", hasDetail(screenshot(context, "01_failed_title")));
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
@@ -401,15 +413,17 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	}
 
 	/**
-	 * Share of pixels in the top 70% of the frame (no hotbar) whose green channel changed by more
-	 * than 4 of 255. 8-bit dither in screenshots changes a pixel by at most 2.
-	 */
-	/**
 	 * Screenshots are 8-bit SDR images, so the HDR brightness expansion must not show in them: with
-	 * either mapping they must match the screenshot taken without one. Without undoing it, Linear at
-	 * 1000/203 nits multiplies the world by about 4.9 and Highlights clips bright areas to white.
+	 * either mapping they must match the screenshot taken without one, in the world and with the
+	 * pause menu open (whose blur reads the main target). A wrong one shows plainly: Linear at
+	 * 1000/203 nits multiplies the world by about 4.9, Highlights clips bright areas to white.
 	 */
 	private void checkHdrScreenshots(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			// Without HDR nothing is expanded, and the comparison would pass without testing anything.
+			this.log("HDR not active: no expansion that screenshots could show");
+			return;
+		}
 		DeepColorConfig config = DeepColorConfig.get();
 		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
 		int peak = config.hdrPeakNits;
@@ -418,18 +432,25 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			config.hdrPeakNits = 1000;
 			config.hdrUiNits = 203;
 		});
-		for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
-			// The sky keeps brightening for a while after "time set noon" (8% of pixels change within
-			// seconds), so each mapping is compared with an SDR screenshot taken just before it.
-			context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
-			context.waitTicks(3);
-			BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + tested.name().toLowerCase(Locale.ROOT));
-			context.runOnClient(minecraft -> config.hdrMapping = tested);
-			context.waitTicks(3);
-			BufferedImage shot = screenshot(context, "hdr_shot_" + tested.name().toLowerCase(Locale.ROOT));
-			double changed = changedShare(plain, shot);
-			this.check(String.format(Locale.ROOT, "screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", tested, changed), changed < 2.0);
+		for (boolean paused : new boolean[]{false, true}) {
+			context.setScreen(() -> paused ? new PauseScreen(true) : null);
+			context.waitTicks(5);
+			String where = paused ? "pause menu" : "world";
+			for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
+				// The sky keeps brightening for a while after "time set noon" (8% of pixels change
+				// within seconds), so each mapping is compared with an SDR screenshot taken just before.
+				String name = (paused ? "paused_" : "") + tested.name().toLowerCase(Locale.ROOT);
+				context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
+				context.waitTicks(3);
+				BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + name);
+				context.runOnClient(minecraft -> config.hdrMapping = tested);
+				context.waitTicks(3);
+				BufferedImage shot = screenshot(context, "hdr_shot_" + name);
+				double changed = changedShare(plain, shot);
+				this.check(String.format(Locale.ROOT, "%s screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", where, tested, changed), changed < 2.0);
+			}
 		}
+		context.setScreen(() -> null);
 		context.runOnClient(minecraft -> {
 			config.hdrMapping = mapping;
 			config.hdrPeakNits = peak;
@@ -438,6 +459,10 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		context.waitTicks(3);
 	}
 
+	/**
+	 * Share of pixels in the top 70% of the frame (no hotbar) whose green channel changed by more
+	 * than 4 of 255. 8-bit dither in screenshots changes a pixel by at most 2.
+	 */
 	private static double changedShare(BufferedImage a, BufferedImage b) {
 		long changed = 0;
 		long total = 0;
@@ -732,11 +757,16 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		context.waitTicks(3);
 	}
 
+	/** The capture, or null when the probe answered without one or never answered. */
 	private static OutputProbe.Capture capture(ClientGameTestContext context, Consumer<Consumer<OutputProbe.Capture>> request) {
 		AtomicReference<OutputProbe.Capture> result = new AtomicReference<>();
-		context.runOnClient(minecraft -> request.accept(result::set));
+		AtomicBoolean answered = new AtomicBoolean();
+		context.runOnClient(minecraft -> request.accept(capture -> {
+			result.set(capture);
+			answered.set(true);
+		}));
 		try {
-			context.waitFor(minecraft -> result.get() != null, 60);
+			context.waitFor(minecraft -> answered.get(), 60);
 		} catch (AssertionError timedOut) {
 			return null;
 		}

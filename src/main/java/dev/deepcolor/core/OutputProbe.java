@@ -31,14 +31,18 @@ public final class OutputProbe {
 
 	private static final int BUFFER_USAGE = GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST;
 
-	private static @Nullable Consumer<Capture> pendingTarget;
+	private static @Nullable Consumer<@Nullable Capture> pendingTarget;
 	private static @Nullable Consumer<@Nullable Capture> pendingBackBuffer;
 
 	private OutputProbe() {
 	}
 
-	/** Captures the dither target on the next frame. Works on both backends. */
-	public static void captureDitherTarget(Consumer<Capture> callback) {
+	/**
+	 * Captures the dither target on the next frame. Works on both backends. The callback gets null
+	 * when the frame has no dither target (the pass was skipped or has failed), so that nothing waits
+	 * for it forever.
+	 */
+	public static void captureDitherTarget(Consumer<@Nullable Capture> callback) {
 		pendingTarget = callback;
 	}
 
@@ -51,11 +55,15 @@ public final class OutputProbe {
 	}
 
 	static void onFramePresented(@Nullable GpuTexture target, int bits) {
-		Consumer<Capture> callback = pendingTarget;
-		if (callback == null || target == null) {
+		Consumer<@Nullable Capture> callback = pendingTarget;
+		if (callback == null) {
 			return;
 		}
 		pendingTarget = null;
+		if (target == null) {
+			callback.accept(null);
+			return;
+		}
 		int width = target.getWidth(0);
 		int height = target.getHeight(0);
 		GpuFormat format = target.getFormat();

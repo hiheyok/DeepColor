@@ -148,7 +148,9 @@ public final class GradientScreen extends Screen {
 			this.backBufferReport = null;
 			return;
 		}
-		OutputProbe.captureDitherTarget(capture -> this.targetReport = describe(capture));
+		OutputProbe.captureDitherTarget(capture -> this.targetReport = capture == null
+			? Component.translatable("deepcolor.gradient.measure_no_target").getString()
+			: describe(capture));
 		OutputProbe.captureBackBuffer(capture -> this.backBufferReport = capture == null
 			? Component.translatable("deepcolor.gradient.measure_no_back_buffer").getString()
 			: describe(capture));

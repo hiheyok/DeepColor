@@ -44,9 +44,10 @@ public final class OutputState {
 		if (isOpenGl()) {
 			GlOutput.Result result = GlOutput.query();
 			surface = result.description();
-			// Some drivers report 0 for the default framebuffer, and a GL error reads as 0 too. Only
-			// a reported 10 is trusted: a 0 would make the dither step infinite and the image black.
-			bits = result.bits() == 10 ? 10 : 8;
+			// Some drivers report 0 for the default framebuffer, and a GL error reads as 0 too. That
+			// would make the dither step infinite and the image black, so it counts as 8. Real depths
+			// (10, 12, 16 for the float framebuffer) are kept.
+			bits = result.bits() <= 0 ? 8 : result.bits();
 			// On macOS a float framebuffer is only HDR once the view has EDR, otherwise it stays SDR.
 			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.isOn(Minecraft.getInstance().getWindow().handle()));
 			if (GlWindowFormat.requested() == GlWindowFormat.Request.FLOAT && !result.floating()) {

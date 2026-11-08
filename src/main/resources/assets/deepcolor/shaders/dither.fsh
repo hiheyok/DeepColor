@@ -3,6 +3,7 @@
 
 uniform sampler2D InSampler;
 uniform sampler2D NoiseSampler;
+uniform sampler2D WorldSampler;
 
 #ifdef VULKAN
 layout(push_constant) uniform DeepColorParams {
@@ -21,6 +22,9 @@ layout(push_constant) uniform DeepColorParams {
     float gamutStretch;
     int gamutTarget;
     float unitNits;
+    float expandBoost;
+    float expandExponent;
+    int expandMode;
 };
 #else
 uniform float ditherLsb;
@@ -38,6 +42,9 @@ uniform float floorScale;
 uniform float gamutStretch;
 uniform int gamutTarget;
 uniform float unitNits;
+uniform float expandBoost;
+uniform float expandExponent;
+uniform int expandMode;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -113,12 +120,20 @@ vec3 toLevels(vec3 color, float stepSize) {
     return clamp(codes * outputLsb, 0.0, 1.0);
 }
 
-// Same curve as hdr_expand.fsh, extended past 1.0 for values brighter than SDR white.
+// The shadow curve: a power law, or the piecewise sRGB curve when gamma is 0. Extended past 1.0 for
+// values brighter than SDR white.
 vec3 decodeCurve(vec3 c) {
     if (gamma > 0.0) {
         return pow(c, vec3(gamma));
     }
     return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+
+vec3 encodeCurve(vec3 l) {
+    if (gamma > 0.0) {
+        return pow(l, vec3(1.0 / gamma));
+    }
+    return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), l));
 }
 
 vec3 srgbDecode(vec3 c) {
@@ -164,6 +179,37 @@ const mat3 BT2020_TO_709 = mat3(
     -0.5876411, 1.1328999, -0.1005789,
     -0.0728499, -0.0083494, 1.1187297
 );
+
+// HDR brightness expansion of the world, in the same encoding as the main target.
+// Highlights (expandMode 1): scaled by luminance so hues stay put; white reaches the full boost, and
+// the exponent grows with the boost so a gray at half brightness never gains more than 15%.
+// Linear (expandMode 2): the whole world scaled up evenly.
+vec3 expandWorld(vec3 world) {
+    vec3 light = decodeCurve(max(world, 0.0));
+    if (expandMode == 1) {
+        float luminance = dot(light, LUMA);
+        light *= 1.0 + expandBoost * pow(clamp(luminance, 0.0, 1.0), expandExponent);
+    } else {
+        light *= 1.0 + expandBoost;
+    }
+    return encodeCurve(light);
+}
+
+// The main target holds the plain SDR image with the interface over it, and its alpha says how much
+// the interface covers each pixel (HdrExpandPass set it to 0 for the world). Normal blending gives
+// current = a * ui + (1 - a) * k * world, where k is any darkening that left alpha alone (the
+// vignette). The expanded image is the same with world replaced by its expansion, so the difference
+// is added for the share that is world.
+vec3 withExpandedWorld(vec3 current, float alpha) {
+    vec3 world = texture(WorldSampler, texCoord).rgb;
+    world = mix(world, vec3(0.0), notEqual(world, world));
+    float worldShare = 1.0 - clamp(alpha, 0.0, 1.0);
+    float worldLuminance = dot(max(world, 0.0), LUMA) * worldShare;
+    // Darkening of the world itself, found from how much darker the pixel is than the world share.
+    // Interface that adds light makes this 1 or more, which counts as no darkening.
+    float darkening = worldLuminance > 1e-4 ? clamp(dot(max(current, 0.0), LUMA) / worldLuminance, 0.0, 1.0) : 1.0;
+    return current + worldShare * darkening * (expandWorld(world) - world);
+}
 
 vec3 stretchGamut(vec3 light) {
     if (gamutStretch <= 0.0) {
@@ -246,9 +292,13 @@ vec3 gradient(int strip, vec2 pixel) {
 }
 
 void main() {
-    vec3 color = texture(InSampler, texCoord).rgb;
+    vec4 sampled = texture(InSampler, texCoord);
+    vec3 color = sampled.rgb;
     // Float targets are not clamped and can hold NaN. Clamping NaN is undefined, so remove it first.
     color = mix(color, vec3(0.0), notEqual(color, color));
+    if (expandMode != 0) {
+        color = withExpandedWorld(color, sampled.a);
+    }
     vec2 pixel = floor(gl_FragCoord.xy);
 
     if (encoding == 1) {

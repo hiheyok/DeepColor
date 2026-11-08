@@ -38,7 +38,7 @@ import org.lwjgl.system.MemoryUtil;
  * this pass converts the image to absolute brightness. See {@link Hdr}.
  */
 public final class DitherPass {
-	private static final int PUSH_CONSTANT_SIZE = 64;
+	private static final int PUSH_CONSTANT_SIZE = 80;
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
 	/** For tests: makes every run of the pass fail, as a shader that does not compile would. */
@@ -46,6 +46,7 @@ public final class DitherPass {
 	private static final BindGroupLayout SAMPLERS = BindGroupLayout.builder()
 		.withUniform("InSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("NoiseSampler", UniformType.COMBINED_IMAGE_SAMPLER)
+		.withUniform("WorldSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.build();
 
 	private static final RenderPipeline PIPELINE_8 = createPipeline("pipeline/dither_8", GpuFormat.RGBA8_UNORM);
@@ -65,6 +66,7 @@ public final class DitherPass {
 	/** Returns the view to present: the dither target, or the input if there is nothing to do. */
 	public static GpuTextureView apply(GpuTextureView source) {
 		if (failed) {
+			OutputProbe.onFramePresented(null, OutputState.bits());
 			return source;
 		}
 		try {
@@ -76,6 +78,7 @@ public final class DitherPass {
 			GpuFormat outputFormat = OutputState.isScrgb() ? GpuFormat.RGBA16_FLOAT : formatForBits(bits);
 			// scRGB always needs the pass: it is what turns the image into absolute brightness.
 			if (!OutputState.isScrgb() && !config.dither && gradientMode == 0 && source.texture().getFormat() == outputFormat) {
+				OutputProbe.onFramePresented(null, bits);
 				return source;
 			}
 
@@ -88,14 +91,18 @@ public final class DitherPass {
 			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
 			// screen keeps the dither depth: its dithered strip always dithers, to show what it does.
 			int quantizeBits = config.dither || gradientMode != 0 ? OutputState.ditherBits() : bits;
+			// The world to expand into HDR highlights, when this frame has one. Taken every frame, so
+			// it never carries over to frames without a world.
+			GpuTextureView world = HdrExpandPass.takeWorldForFrame();
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
-				quantizeBits, strength, offset, gradientMode);
+				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? world : null);
 			OutputProbe.onFramePresented(target, bits);
 			return Objects.requireNonNull(targetView);
 		} catch (RuntimeException e) {
 			// Presenting the undithered image is always possible, so never let this take the game down.
 			failed = true;
 			DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
+			OutputProbe.onFramePresented(null, OutputState.bits());
 			return source;
 		}
 	}
@@ -114,12 +121,12 @@ public final class DitherPass {
 	 * with the game's own blit, which only lacks the dither.
 	 */
 	public static RenderTarget flattenForReadback(RenderTarget target) {
-		GpuTextureView view = target.getColorTextureView();
-		if (view == null || view.texture().getFormat() == GpuFormat.RGBA8_UNORM) {
+		// The main target holds the plain SDR image also with HDR on (the expansion happens only when
+		// the frame is shown, see HdrExpandPass), so it can be read as it is.
+		GpuTextureView source = target.getColorTextureView();
+		if (source == null || source.texture().getFormat() == GpuFormat.RGBA8_UNORM) {
 			return target;
 		}
-		// With HDR on, the world in the main target is brighter than SDR white. Undo that first.
-		GpuTextureView source = HdrExpandPass.forReadback(view);
 		if (flattened == null || flattened.width != target.width || flattened.height != target.height) {
 			if (flattened != null) {
 				flattened.destroyBuffers();
@@ -130,7 +137,7 @@ public final class DitherPass {
 		if (!failed) {
 			try {
 				DeepColorConfig config = DeepColorConfig.get();
-				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
+				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0, null);
 				return flattened;
 			} catch (RuntimeException e) {
 				failed = true;
@@ -173,7 +180,8 @@ public final class DitherPass {
 		}
 	}
 
-	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode) {
+	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode,
+		@Nullable GpuTextureView world) {
 		if (SIMULATE_FAILURE) {
 			throw new IllegalStateException("Simulated dither pass failure (deepcolor.test.failDither)");
 		}
@@ -187,6 +195,9 @@ public final class DitherPass {
 			var nearest = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
 			pass.setUniform("InSampler", source, nearest);
 			pass.setUniform("NoiseSampler", Objects.requireNonNull(noiseView), nearest);
+			boolean expand = world != null && hdrActive;
+			// Every sampler must be bound; the noise stands in when there is no world to expand.
+			pass.setUniform("WorldSampler", expand ? world : noiseView, nearest);
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
@@ -205,6 +216,9 @@ public final class DitherPass {
 				constants.putFloat(hdrActive ? config.hdrGamutStretch : 0.0F);
 				constants.putInt(config.hdrGamutTarget.ordinal());
 				constants.putFloat(Hdr.unitNits());
+				constants.putFloat(expand ? HdrExpandPass.boost() : 0.0F);
+				constants.putFloat(expand ? HdrExpandPass.exponent() : 0.0F);
+				constants.putInt(!expand ? 0 : HdrExpandPass.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}
