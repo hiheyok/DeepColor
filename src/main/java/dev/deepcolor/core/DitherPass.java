@@ -189,7 +189,8 @@ public final class DitherPass {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
 				constants.putFloat(lsb(output.bits));
-				constants.putFloat(output == Output.SCRGB ? 0.0F : strength);
+				// Float output is never dithered in the real image, only in the gradient screen's strip.
+				constants.putFloat(strength);
 				constants.putFloat(noiseOffset);
 				constants.putInt(mode);
 				constants.putInt(config.noisePattern == DeepColorConfig.NoisePattern.BLUE_NOISE ? 0 : 1);

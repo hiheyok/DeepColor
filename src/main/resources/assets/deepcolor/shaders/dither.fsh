@@ -235,12 +235,14 @@ vec3 gradient(int strip, vec2 pixel) {
         return toLevels(ramp, LSB_8);
     }
     if (strip == 1) {
+        // A plain 8-bit pipeline with standard dither, for comparison: always strength 1.
         return toLevels(dither(ramp, LSB_8, 1.0, pixel), LSB_8);
     }
     if (strip == 2) {
         return toLevels(ramp, outputLsb);
     }
-    return toLevels(dither(ramp, ditherLsb, 1.0, pixel), ditherLsb);
+    // The real dither at the configured depth and strength.
+    return toLevels(dither(ramp, ditherLsb, strength, pixel), ditherLsb);
 }
 
 void main() {

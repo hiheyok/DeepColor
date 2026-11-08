@@ -620,6 +620,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		double dithered = meanError(first, rows[3], quarter / 2, scale, levels);
 		this.check(String.format(Locale.ROOT, "dither brings the local mean closer to the true ramp (%.3f vs %.3f LSB)", dithered, undithered), dithered < undithered / 2.0);
 		this.check("true black stays black in every strip", blackColumnIsZero(first, rows));
+		// Triangular noise at strength s moves a pixel less than s steps, so after rounding it lands
+		// less than s + 0.5 steps from the true ramp: up to about 1.48 at strength 1, 2.48 at 2. The
+		// limits leave room for the sampled ramp position being slightly off.
+		float strength = DeepColorConfig.get().ditherStrength;
+		double spread = maxDeviation(first, rows[3], quarter / 2, scale, levels);
+		this.log(String.format(Locale.ROOT, "dithered strip: farthest pixel %.2f steps from the ramp at strength %.2f", spread, strength));
+		boolean followsStrength = spread < strength + 0.6 && (strength > 1.5F ? spread > strength - 0.25 : true);
+		this.check("dithered strip follows the configured strength", followsStrength);
 
 		OutputProbe.Capture second = capture(context, OutputProbe::captureDitherTarget);
 		boolean temporal = DeepColorConfig.get().temporal;
@@ -761,6 +769,18 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			counted++;
 		}
 		return counted == 0 ? 0.0 : bias / counted;
+	}
+
+	/** Farthest any pixel lands from the ideal ramp, in levels. Labels sit at the far left. */
+	private static double maxDeviation(OutputProbe.Capture capture, int centerRow, int halfHeight, float scale, float levels) {
+		double max = 0.0;
+		for (int x = capture.width() / 3; x < capture.width(); x++) {
+			double ideal = (x + 0.5) / capture.width() * 32.0 / 255.0 * levels;
+			for (int y = centerRow - halfHeight / 2; y < centerRow + halfHeight / 2; y++) {
+				max = Math.max(max, Math.abs(Math.floor(capture.code(x, y) * levels / scale + 1e-9) - ideal));
+			}
+		}
+		return max;
 	}
 
 	private static boolean blackColumnIsZero(OutputProbe.Capture capture, int[] rows) {
