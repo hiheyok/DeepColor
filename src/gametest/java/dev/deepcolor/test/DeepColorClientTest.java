@@ -68,14 +68,16 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			return;
 		}
 		this.log("STATUS " + context.computeOnClient(minecraft -> OutputState.statusLine()));
-		if (Boolean.getBoolean("deepcolor.test.failGlFloatContext")) {
+		// The simulated context failure only exists on macOS. Elsewhere the job is a plain forced-HDR run.
+		boolean contextFails = Boolean.getBoolean("deepcolor.test.failGlFloatContext") && Hdr.isMacOs();
+		if (contextFails) {
 			// HDR was asked for, but the float context "failed": the game must have started anyway,
 			// on the next format, without EDR (which would show an SDR image far too dark).
 			this.check("OpenGL falls back from the float format when its context fails (now " + GlWindowFormat.requested() + ")",
 				GlWindowFormat.requested() != GlWindowFormat.Request.FLOAT);
 			this.check("the fallback output is SDR", context.computeOnClient(minecraft -> !OutputState.isScrgb()));
 		}
-		if (Boolean.getBoolean("deepcolor.test.forceScrgb") && !Boolean.getBoolean("deepcolor.test.failGlFloatContext")) {
+		if (Boolean.getBoolean("deepcolor.test.forceScrgb") && !contextFails) {
 			this.check("forced HDR output ends up on the float surface", context.computeOnClient(minecraft -> OutputState.isScrgb()));
 		}
 		if (Hdr.isMacOs() && context.computeOnClient(minecraft -> OutputState.isOpenGl())) {

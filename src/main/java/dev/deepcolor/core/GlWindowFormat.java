@@ -23,7 +23,10 @@ public final class GlWindowFormat {
 		EIGHT_BIT
 	}
 
-	/** For tests: context creation fails for the float format, as it would on a driver without one. */
+	/**
+	 * For tests: context creation fails for the float format, as it would on a macOS driver without
+	 * one. Only on macOS, the only system that picks the format at context creation (see GlDeviceMixin).
+	 */
 	private static final boolean SIMULATE_FLOAT_CONTEXT_FAILURE = Boolean.getBoolean("deepcolor.test.failGlFloatContext");
 
 	private static Request requested = Request.EIGHT_BIT;
@@ -77,7 +80,7 @@ public final class GlWindowFormat {
 
 	/** Whether context creation should pretend to fail for the current format. */
 	public static boolean simulateContextFailure() {
-		return SIMULATE_FLOAT_CONTEXT_FAILURE && requested == Request.FLOAT;
+		return SIMULATE_FLOAT_CONTEXT_FAILURE && requested == Request.FLOAT && Hdr.isMacOs();
 	}
 
 	/** Called once the context exists, which settles the format for every window. */

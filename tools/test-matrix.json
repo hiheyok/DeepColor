@@ -152,6 +152,7 @@
 		},
 		{
 			"name": "gl-hdr-ctxfail",
+			"_comment": "macOS only simulates the failure (it picks the GL pixel format at context creation); elsewhere this is a plain forced-HDR run.",
 			"backend": "opengl",
 			"mods": "vanilla",
 			"jvmArgs": [
