@@ -105,6 +105,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 
 		this.checkGradient(context);
 		this.checkEndpoints(context);
+		this.checkHdrShadowNoise(context);
 		this.checkScreenshotColor(context);
 		this.checkReloadReleasesPipelines(context);
 
@@ -309,6 +310,100 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			config.ditherStrength, wrongBlack, wrongWhite, samples), wrongBlack == 0 && wrongWhite == 0);
 		context.setScreen(() -> new TitleScreen());
 		context.waitTicks(3);
+	}
+
+	/** Read the real FP16 pass: flat shadows gain controllable grain, black/white remain exact. */
+	private void checkHdrShadowNoise(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> OutputState.isScrgb())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		float saved = config.hdrShadowDither;
+		boolean temporal = config.temporal;
+		boolean enabled = config.dither;
+		DeepColorConfig.NoisePattern pattern = config.noisePattern;
+		try {
+			context.runOnClient(minecraft -> {
+				config.hdrShadowDither = 0;
+				config.temporal = false;
+				config.dither = true;
+			});
+			context.setScreen(ShadowNoiseScreen::new);
+			context.waitTicks(3);
+			OutputProbe.Capture plain = capture(context, OutputProbe::captureDitherTarget);
+			boolean active = context.computeOnClient(minecraft -> Hdr.active());
+			for (DeepColorConfig.NoisePattern tested : DeepColorConfig.NoisePattern.values()) {
+				double previousRms = 0;
+				for (float amount : new float[] {2, 8}) {
+					context.runOnClient(minecraft -> {
+						config.noisePattern = tested;
+						config.hdrShadowDither = amount;
+					});
+					context.waitTicks(3);
+					OutputProbe.Capture noisy = capture(context, OutputProbe::captureDitherTarget);
+					double sum = 0, squared = 0, mean = 0;
+					int count = 0, wrongEndpoints = 0;
+					for (int y = noisy.height() / 4; y < noisy.height() * 3 / 4; y++) {
+						for (int x = noisy.width() * 5 / 12; x < noisy.width() * 7 / 12; x++) {
+							double delta = noisy.value(x, y) - plain.value(x, y);
+							sum += delta;
+							squared += delta * delta;
+							mean += plain.value(x, y);
+							count++;
+							if (noisy.value(x - noisy.width() / 3, y) != plain.value(x - noisy.width() / 3, y)
+								|| noisy.value(x + noisy.width() / 3, y) != plain.value(x + noisy.width() / 3, y)) {
+								wrongEndpoints++;
+							}
+						}
+					}
+					double rms = Math.sqrt(squared / count);
+					this.check("HDR shadow noise leaves black and white exact (" + tested + ", " + amount + ")", wrongEndpoints == 0);
+					this.check("HDR shadow noise preserves mean brightness", Math.abs(sum / count) < mean / count * 0.01);
+					this.check("HDR shadow noise follows active HDR", active ? rms > 0 : rms == 0);
+					if (active && previousRms > 0) {
+						this.check("stronger HDR noise increases shadow variance", rms > previousRms * 2);
+					}
+					previousRms = rms;
+					OutputProbe.Capture still = capture(context, OutputProbe::captureDitherTarget);
+					this.check("HDR noise is fixed with animation off", Arrays.equals(noisy.values(), still.values()));
+				}
+			}
+			context.runOnClient(minecraft -> config.temporal = true);
+			context.waitTicks(3);
+			OutputProbe.Capture animated = capture(context, OutputProbe::captureDitherTarget);
+			OutputProbe.Capture next = capture(context, OutputProbe::captureDitherTarget);
+			this.check("HDR shadow noise animates only with HDR active", Arrays.equals(animated.values(), next.values()) != active);
+			context.runOnClient(minecraft -> config.dither = false);
+			context.waitTicks(3);
+			OutputProbe.Capture disabled = capture(context, OutputProbe::captureDitherTarget);
+			this.check("master dither switch disables HDR noise", Arrays.equals(plain.values(), disabled.values()));
+		} finally {
+			context.runOnClient(minecraft -> {
+				config.hdrShadowDither = saved;
+				config.temporal = temporal;
+				config.dither = enabled;
+				config.noisePattern = pattern;
+			});
+			context.setScreen(TitleScreen::new);
+			context.waitTicks(3);
+		}
+	}
+
+	private static final class ShadowNoiseScreen extends Screen {
+		private ShadowNoiseScreen() {
+			super(Component.empty());
+		}
+
+		@Override
+		public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+		}
+
+		@Override
+		public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+			graphics.fill(0, 0, this.width / 3, this.height, 0xFF000000);
+			graphics.fill(this.width / 3, 0, this.width * 2 / 3, this.height, 0xFF080808);
+			graphics.fill(this.width * 2 / 3, 0, this.width, this.height, 0xFFFFFFFF);
+		}
 	}
 
 	/**

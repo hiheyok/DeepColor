@@ -130,6 +130,7 @@ public final class DeepColorConfig {
 	}
 
 	public static final float MAX_STRENGTH = 2.0F;
+	public static final float MAX_HDR_SHADOW_DITHER = 8.0F;
 	/** Low enough to match a dim SDR setup, which can sit around 60 to 80 nits. */
 	public static final int MIN_UI_NITS = 40;
 	public static final int MAX_UI_NITS = 600;
@@ -174,6 +175,8 @@ public final class DeepColorConfig {
 	 * 0 is off. Measure it with the near-black pattern on the gradient screen.
 	 */
 	public float hdrShadowFloor = 0.0F;
+	/** Optional near-black noise amplitude in nominal 10-bit PQ steps; 0 is off. */
+	public float hdrShadowDither = 0.0F;
 	/**
 	 * 0 shows the game's sRGB colors accurately. 1 stretches them to the Display P3 gamut, like a
 	 * monitor's native-gamut SDR mode, which is why SDR can look more saturated than accurate HDR.
@@ -240,6 +243,9 @@ public final class DeepColorConfig {
 		}
 		if (!(this.hdrGamutStretch >= 0.0F && this.hdrGamutStretch <= 1.0F)) {
 			this.hdrGamutStretch = 0.0F;
+		}
+		if (!(this.hdrShadowDither >= 0.0F && this.hdrShadowDither <= MAX_HDR_SHADOW_DITHER)) {
+			this.hdrShadowDither = defaults.hdrShadowDither;
 		}
 		if (!(this.hdrShadowFloor >= 0.0F && this.hdrShadowFloor <= 0.2F)) {
 			this.hdrShadowFloor = 0.0F;

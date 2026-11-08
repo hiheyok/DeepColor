@@ -137,6 +137,9 @@ public final class OutputState {
 				? String.format(Locale.ROOT, "HDR on: UI %.0f nits, peak %.0f nits, %s, %s", Hdr.uiNits(), Hdr.peakNits(),
 					config.hdrMapping.name().toLowerCase(Locale.ROOT),
 					(config.hdrGamma == DeepColorConfig.SRGB_CURVE ? "sRGB curve" : String.format(Locale.ROOT, "gamma %.2f", config.hdrGamma))
+						+ (config.dither && config.hdrShadowDither > 0.0F ? String.format(Locale.ROOT, ", shadow noise %.1f PQ LSB %s %s",
+							config.hdrShadowDither, config.noisePattern == DeepColorConfig.NoisePattern.BLUE_NOISE ? "blue" : "gradient",
+							config.temporal ? "temporal" : "static") : "")
 						+ (config.hdrShadowFloor > 0.0F ? String.format(Locale.ROOT, ", floor %.3f nits", config.hdrShadowFloor) : "")
 						+ (config.hdrGamutStretch > 0.0F ? String.format(Locale.ROOT, ", gamut %.0f%% toward %s", config.hdrGamutStretch * 100,
 							switch (config.hdrGamutTarget) {
