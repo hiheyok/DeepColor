@@ -85,12 +85,19 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		}
 		if (Hdr.isMacOs() && context.computeOnClient(minecraft -> OutputState.isOpenGl())) {
 			// Asked from the game window itself: the float (linear) encoding must be used exactly when
-			// the window reads linear light, and then EDR must be on too. A mismatch shows an image
-			// far too dark (linear values read as gamma) or washed out (the reverse).
+			// the window reads linear light. A mismatch shows an image far too dark (linear values read
+			// as gamma) or washed out (the reverse). HDR scaling needs the EDR flag as well, or
+			// everything above SDR white would clip.
 			boolean linear = context.computeOnClient(minecraft -> MacEdr.hasLinearColorSpace(minecraft.getWindow().handle()));
 			boolean edr = context.computeOnClient(minecraft -> MacEdr.isOn(minecraft.getWindow().handle()));
 			boolean scrgb = context.computeOnClient(minecraft -> OutputState.isScrgb());
-			this.check("game window color space matches the output (linear " + linear + ", EDR " + edr + ")", linear == scrgb && (!scrgb || edr));
+			boolean headroom = context.computeOnClient(minecraft -> OutputState.hasHeadroom());
+			this.check("game window color space matches the output (linear " + linear + ", EDR " + edr + ")", linear == scrgb && headroom == (scrgb && edr));
+			if (Boolean.getBoolean("deepcolor.test.noEdr") && !contextFails) {
+				// The test assumes HDR is on, so only the missing EDR flag can keep it off.
+				this.check("without EDR the float surface stays SDR (linear " + linear + ", EDR " + edr + ")",
+					scrgb && !edr && !context.computeOnClient(minecraft -> Hdr.active()));
+			}
 		}
 		context.takeScreenshot("01_title");
 		this.checkModMenu();

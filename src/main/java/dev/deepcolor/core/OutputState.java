@@ -13,6 +13,8 @@ public final class OutputState {
 	private static String surface = "unknown";
 	private static int bits = 8;
 	private static boolean scrgb;
+	/** Whether values above 1.0 on the float surface reach the screen. Only false for a macOS view without EDR. */
+	private static boolean headroom = true;
 	private static boolean initialized;
 
 	private OutputState() {
@@ -34,6 +36,14 @@ public final class OutputState {
 		return scrgb;
 	}
 
+	/**
+	 * Whether the float surface can show values above SDR white. On macOS the OpenGL view needs the EDR
+	 * flag for that; without it the linear encoding is still correct, but HDR scaling would clip.
+	 */
+	public static boolean hasHeadroom() {
+		return scrgb && headroom;
+	}
+
 	/** Runs on the render thread at the start of the first frame blitted to the surface. */
 	public static void initialize() {
 		if (initialized) {
@@ -51,6 +61,11 @@ public final class OutputState {
 			// On macOS the float encoding is linear light, which only the window's extended linear sRGB
 			// color space reads correctly (see MacEdr). Without it the output stays plain SDR.
 			scrgb = result.floating() && (!Hdr.isMacOs() || MacEdr.hasLinearColorSpace(Minecraft.getInstance().getWindow().handle()));
+			// Read once: the flag is set when the window is created and never changes afterwards.
+			headroom = !scrgb || !Hdr.isMacOs() || MacEdr.isOn(Minecraft.getInstance().getWindow().handle());
+			if (scrgb && !headroom) {
+				DeepColor.LOGGER.warn("HDR output: the OpenGL view has no EDR, so HDR stays off and the image is SDR");
+			}
 			if (GlWindowFormat.requested() == GlWindowFormat.Request.FLOAT && !result.floating()) {
 				DeepColor.LOGGER.info("HDR output: the driver gave no floating-point OpenGL framebuffer, using SDR output");
 			} else if (result.floating() && !scrgb) {

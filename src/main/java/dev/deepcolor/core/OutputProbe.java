@@ -68,11 +68,19 @@ public final class OutputProbe {
 		int width = target.getWidth(0);
 		int height = target.getHeight(0);
 		GpuFormat format = target.getFormat();
+		// The copy callback can run inside copyTextureToBuffer, so it owns the buffer and the answer
+		// as soon as it starts: the setup failure path below must not close or answer a second time.
+		boolean[] handedOver = new boolean[1];
 		GpuBuffer buffer = null;
 		try {
 			buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
-			copyAndAnswer(target, buffer, width, height, format, bits, callback);
+			copyAndAnswer(target, buffer, width, height, format, bits, callback, handedOver);
 		} catch (RuntimeException e) {
+			if (handedOver[0]) {
+				// Only the callback's own failure can get here, after it has answered.
+				DeepColor.LOGGER.warn("The dither target readback callback failed", e);
+				return;
+			}
 			// Setting up the readback failed: free what exists and still answer.
 			DeepColor.LOGGER.warn("Could not start reading back the dither target", e);
 			if (buffer != null) {
@@ -82,8 +90,9 @@ public final class OutputProbe {
 		}
 	}
 
-	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback) {
+	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback, boolean[] handedOver) {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
+			handedOver[0] = true;
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;
 			// The buffer goes away whatever happens, and the callback always gets an answer.

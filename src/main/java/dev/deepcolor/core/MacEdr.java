@@ -23,9 +23,13 @@ import org.lwjgl.system.macosx.ObjCRuntime;
  * an HDR display connected or woken later, or the window moved to one, then gets HDR without a
  * restart. Whether HDR is actually on is followed every frame through SDL's window properties
  * (see {@link Hdr#active()}), not decided here. The output only uses the float encoding when the
- * window really has the linear color space ({@link #hasLinearColorSpace}).
+ * window really has the linear color space ({@link #hasLinearColorSpace}), and only scales for HDR
+ * when the view also has the EDR flag ({@link #isOn}): without it values above 1.0 are clipped.
  */
 public final class MacEdr {
+	/** Test switch: set the color space but leave the EDR flag off, as on a view without EDR support. */
+	private static final boolean SIMULATE_NO_EDR = Boolean.getBoolean("deepcolor.test.noEdr");
+
 	private MacEdr() {
 	}
 
@@ -130,19 +134,25 @@ public final class MacEdr {
 
 			long view = JNI.invokePPP(nsWindow, sel("contentView"), msgSend);
 			long setWants = sel("setWantsExtendedDynamicRangeOpenGLSurface:");
-			if (view == 0L || (JNI.invokePPPP(view, sel("respondsToSelector:"), setWants, msgSend) & 0xFF) == 0) {
-				// Still correct, just without values above SDR white.
-				DeepColor.LOGGER.warn("HDR output: the OpenGL view does not support EDR, the image stays within SDR white");
+			if (SIMULATE_NO_EDR || view == 0L || (JNI.invokePPPP(view, sel("respondsToSelector:"), setWants, msgSend) & 0xFF) == 0) {
+				// Still a correct image, just SDR: Hdr.active() stays off without the flag.
+				DeepColor.LOGGER.warn("HDR output: the OpenGL view does not support EDR, the image stays SDR");
 				return true;
 			}
 			JNI.invokePPV(view, setWants, true, msgSend);
-			DeepColor.LOGGER.info("HDR output: linear color space and EDR set for the OpenGL view (screens can show up to {}x SDR white now)",
-				String.format(java.util.Locale.ROOT, "%.1f", maximumPotentialEdr(msgSend)));
-			return true;
 		} catch (Throwable e) {
 			DeepColor.LOGGER.error("HDR output: could not enable EDR for the OpenGL view", e);
 			return false;
 		}
+		// Only for the log: a failure here must not turn the successful setup above into a failure.
+		try {
+			DeepColor.LOGGER.info("HDR output: linear color space and EDR set for the OpenGL view (screens can show up to {}x SDR white now)",
+				String.format(java.util.Locale.ROOT, "%.1f", maximumPotentialEdr(msgSend())));
+		} catch (Throwable e) {
+			DeepColor.LOGGER.info("HDR output: linear color space and EDR set for the OpenGL view");
+			DeepColor.LOGGER.debug("Could not read the EDR potential of the screens", e);
+		}
+		return true;
 	}
 
 	/** The highest maximumPotentialExtendedDynamicRangeColorComponentValue of all screens, 1 if none. For the log. */

@@ -53,9 +53,10 @@ public final class Hdr {
 	 * by more than a quarter.
 	 */
 	public static void logChanges() {
-		// Only of interest when HDR was asked for, also (and most of all) when it did not turn on.
+		// Only of interest when HDR was asked for, also (and most of all) when it did not turn on, or
+		// while the float surface is still in use after the setting was turned off (until a restart).
 		// Otherwise skip the SDL queries every frame.
-		if (!requested()) {
+		if (!requested() && !OutputState.isScrgb()) {
 			return;
 		}
 		long window = window();
@@ -131,7 +132,7 @@ public final class Hdr {
 	 * so turning Windows HDR off while playing falls back to a plain SDR image instead of clipping.
 	 */
 	public static boolean active() {
-		return OutputState.isScrgb() && (ASSUME_HDR || windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN));
+		return OutputState.hasHeadroom() && (ASSUME_HDR || windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN));
 	}
 
 	/** Brightness of SDR white, which is where the interface sits. */

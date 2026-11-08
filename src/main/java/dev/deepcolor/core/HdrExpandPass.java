@@ -44,10 +44,10 @@ public final class HdrExpandPass {
 	/** The world as it was when the interface started drawing. */
 	private static @Nullable GpuTexture world;
 	private static @Nullable GpuTextureView worldView;
-	/** Frames since the world copy was last used. It is freed when that grows long. */
-	private static int framesUnused;
-	/** Unused this many frames (about 10 seconds), the world copy is freed; 66 MB at 4K. */
-	private static final int FREE_AFTER_FRAMES = 600;
+	/** When the world copy was last used, from System.nanoTime(). */
+	private static long lastUsedNanos;
+	/** Unused this long, the world copy is freed; 66 MB at 4K. Time, not frames, so frame rate does not matter. */
+	private static final long FREE_AFTER_NANOS = 10_000_000_000L;
 
 	/**
 	 * What this frame did to the main target. Null on a frame that did not mark its world. Created
@@ -75,7 +75,7 @@ public final class HdrExpandPass {
 	/** At the start of every frame, with or without a world. */
 	public static void frameStarted() {
 		frame = null;
-		if (world != null && ++framesUnused > FREE_AFTER_FRAMES) {
+		if (world != null && System.nanoTime() - lastUsedNanos > FREE_AFTER_NANOS) {
 			close();
 		}
 	}
@@ -123,7 +123,7 @@ public final class HdrExpandPass {
 			// replaced and its alpha then says where interface was blurred into it (see afterBlur).
 			device.createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, width, height);
 			frame = new Frame(color, colorView, true, boost, config.hdrMapping);
-			framesUnused = 0;
+			lastUsedNanos = System.nanoTime();
 		} catch (RuntimeException e) {
 			failed = true;
 			DeepColor.LOGGER.error("Brightness expansion failed and is now disabled", e);
@@ -232,7 +232,7 @@ public final class HdrExpandPass {
 
 	public static void close() {
 		frame = null;
-		framesUnused = 0;
+		lastUsedNanos = System.nanoTime();
 		if (worldView != null) {
 			worldView.close();
 			worldView = null;

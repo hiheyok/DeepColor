@@ -94,8 +94,7 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 						value -> config.hdrOutput = value, () -> config.hdrOutput, config)
 						.setFlags(OptionFlag.REQUIRES_GAME_RESTART)))
 				.addOptionGroup(builder.createOptionGroup()
-					.addOption(nitsOption(builder, "hdr_ui_nits", DeepColorConfig.MIN_UI_NITS, DeepColorConfig.MAX_UI_NITS, 10, 203,
-						value -> config.hdrUiNits = value, () -> config.hdrUiNits, config))
+					.addOption(uiNitsOption(builder, config))
 					.addOption(nitsOption(builder, "hdr_peak_nits", DeepColorConfig.MIN_PEAK_NITS, DeepColorConfig.MAX_PEAK_NITS, 50, 0,
 						value -> config.hdrPeakNits = value, () -> config.hdrPeakNits, config))
 					.addOption(enumOption(builder, "hdr_mapping", DeepColorConfig.HdrMapping.class, DeepColorConfig.HdrMapping.HIGHLIGHTS,
@@ -130,6 +129,50 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 			.setBinding(index -> config.hdrShadowFloor = steps[index], () -> nearestStep(steps, config.hdrShadowFloor))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
 			.setStorageHandler(config::save);
+	}
+
+	/**
+	 * Interface brightness. The positions are Auto, then every 10 nits, plus the config default
+	 * (203, the BT.2408 reference white) so that "reset to default" gives exactly the default.
+	 */
+	private static net.caffeinemc.mods.sodium.api.config.structure.IntegerOptionBuilder uiNitsOption(ConfigBuilder builder, DeepColorConfig config) {
+		int[] steps = uiNitsSteps();
+		int defaultIndex = java.util.Arrays.binarySearch(steps, new DeepColorConfig().hdrUiNits);
+		return builder.createIntegerOption(id("hdr_ui_nits"))
+			.setName(Component.translatable("deepcolor.option.hdr_ui_nits"))
+			.setTooltip(Component.translatable("deepcolor.option.hdr_ui_nits.tooltip"))
+			.setRange(0, steps.length - 1, 1)
+			.setValueFormatter(index -> index == 0 ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", steps[index]))
+			.setDefaultValue(defaultIndex)
+			.setBinding(index -> config.hdrUiNits = steps[index], () -> nearestStep(steps, config.hdrUiNits))
+			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
+			.setStorageHandler(config::save);
+	}
+
+	/** 0 (Auto), then MIN_UI_NITS to MAX_UI_NITS in steps of 10, with the config default added in order. */
+	static int[] uiNitsSteps() {
+		int defaultNits = new DeepColorConfig().hdrUiNits;
+		java.util.TreeSet<Integer> values = new java.util.TreeSet<>();
+		values.add(0);
+		for (int nits = DeepColorConfig.MIN_UI_NITS; nits <= DeepColorConfig.MAX_UI_NITS; nits += 10) {
+			values.add(nits);
+		}
+		values.add(defaultNits);
+		return values.stream().mapToInt(Integer::intValue).toArray();
+	}
+
+	/** The nearest position; 0 (Auto) only for the value 0 itself. */
+	private static int nearestStep(int[] steps, int value) {
+		if (value == 0) {
+			return 0;
+		}
+		int best = 1;
+		for (int i = 2; i < steps.length; i++) {
+			if (Math.abs(steps[i] - value) < Math.abs(steps[best] - value)) {
+				best = i;
+			}
+		}
+		return best;
 	}
 
 	private static int nearestStep(float[] steps, float value) {
@@ -193,8 +236,7 @@ public final class DeepColorSodiumOptions implements ConfigEntryPoint {
 			.setTooltip(Component.translatable("deepcolor.option." + key + ".tooltip"))
 			.setRange(auto, max, step)
 			.setValueFormatter(value -> value <= auto ? Component.translatable("deepcolor.option.nits.auto") : Component.translatable("deepcolor.option.nits.value", value))
-			// The default must sit on a step too: Sodium falls back to it for any value off the steps,
-			// and "reset to default" would otherwise store 203 while the slider shows 200.
+			// The default must sit on a step too: Sodium falls back to it for any value off the steps.
 			.setDefaultValue(defaultNits == 0 ? auto : snap(defaultNits, min, max, step))
 			.setBinding(value -> setter.accept(value <= auto ? 0 : value), () -> getter.get() == 0 ? auto : snap(getter.get(), min, max, step))
 			.setEnabledProvider(state -> hdrOn(state), HDR_OUTPUT)
