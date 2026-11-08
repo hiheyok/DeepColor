@@ -11,6 +11,7 @@
 		"output.GameRendererMixin",
 		"output.GlBackendMixin",
 		"output.GlDeviceMixin",
+		"output.HudMixin",
 		"output.ScreenshotMixin",
 		"output.VulkanGpuSurfaceMixin",
 		"output.VulkanInstanceMixin",

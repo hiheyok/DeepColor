@@ -141,8 +141,19 @@ public final class GradientScreen extends Screen {
 	/** Measures the undithered output-depth strip of the frame that is on screen right now. */
 	private void measure() {
 		this.selected = -1;
-		OutputProbe.captureDitherTarget(capture -> this.targetReport = describe(capture));
-		OutputProbe.captureBackBuffer(capture -> this.backBufferReport = describe(capture));
+		if (OutputState.isScrgb()) {
+			// Float output is never quantized, and with HDR on strip 2 holds the nit patches, not the
+			// ramp. A level count would mean nothing.
+			this.targetReport = Component.translatable("deepcolor.gradient.measure_float").getString();
+			this.backBufferReport = null;
+			return;
+		}
+		OutputProbe.captureDitherTarget(capture -> this.targetReport = capture == null
+			? Component.translatable("deepcolor.gradient.measure_no_target").getString()
+			: describe(capture));
+		OutputProbe.captureBackBuffer(capture -> this.backBufferReport = capture == null
+			? Component.translatable("deepcolor.gradient.measure_no_back_buffer").getString()
+			: describe(capture));
 	}
 
 	private static String describe(OutputProbe.Capture capture) {

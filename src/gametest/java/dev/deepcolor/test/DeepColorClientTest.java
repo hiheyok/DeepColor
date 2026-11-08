@@ -10,6 +10,7 @@ import dev.deepcolor.core.DitherPass;
 import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.GlWindowFormat;
 import dev.deepcolor.core.Hdr;
+import dev.deepcolor.core.HdrExpandPass;
 import dev.deepcolor.core.MacEdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
@@ -28,6 +29,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -38,6 +40,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
@@ -81,10 +84,20 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			this.check("forced HDR output ends up on the float surface", context.computeOnClient(minecraft -> OutputState.isScrgb()));
 		}
 		if (Hdr.isMacOs() && context.computeOnClient(minecraft -> OutputState.isOpenGl())) {
-			// Asked from the game window's own view: EDR must be on exactly when the output is HDR.
-			// Off with HDR would show a dim SDR image, on without it an image far too dark.
+			// Asked from the game window itself: the float (linear) encoding must be used exactly when
+			// the window reads linear light. A mismatch shows an image far too dark (linear values read
+			// as gamma) or washed out (the reverse). HDR scaling needs the EDR flag as well, or
+			// everything above SDR white would clip.
+			boolean linear = context.computeOnClient(minecraft -> MacEdr.hasLinearColorSpace(minecraft.getWindow().handle()));
 			boolean edr = context.computeOnClient(minecraft -> MacEdr.isOn(minecraft.getWindow().handle()));
-			this.check("EDR on the game window matches the output (EDR " + edr + ")", edr == context.computeOnClient(minecraft -> OutputState.isScrgb()));
+			boolean scrgb = context.computeOnClient(minecraft -> OutputState.isScrgb());
+			boolean headroom = context.computeOnClient(minecraft -> OutputState.hasHeadroom());
+			this.check("game window color space matches the output (linear " + linear + ", EDR " + edr + ")", linear == scrgb && headroom == (scrgb && edr));
+			if (Boolean.getBoolean("deepcolor.test.noEdr") && !contextFails) {
+				// The test assumes HDR is on, so only the missing EDR flag can keep it off.
+				this.check("without EDR the float surface stays SDR (linear " + linear + ", EDR " + edr + ")",
+					scrgb && !edr && !context.computeOnClient(minecraft -> Hdr.active()));
+			}
 		}
 		context.takeScreenshot("01_title");
 		this.checkModMenu();
@@ -110,6 +123,9 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				world.getConnection().waitForClientboundPackets();
 				context.waitTicks(10);
 				this.checkWorldHdr(context);
+				this.checkVignetteHdr(context);
+				this.checkNauseaHdr(context, world);
+				this.checkHdrScreenshots(context);
 			}
 
 			// The outline target and its blit are another path that does not end in the main target.
@@ -246,6 +262,16 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	private void checkDitherFailure(ClientGameTestContext context) {
 		context.waitTicks(10);
 		this.check("dither pass switched itself off after failing", context.computeOnClient(minecraft -> DitherPass.failed()));
+		// A request for the dither target must still be answered, or the gradient screen's measure
+		// key (and anything else waiting) would wait forever.
+		AtomicReference<String> answer = new AtomicReference<>();
+		context.runOnClient(minecraft -> OutputProbe.captureDitherTarget(capture -> answer.set(capture == null ? "none" : "a capture")));
+		try {
+			context.waitFor(minecraft -> answer.get() != null, 60);
+		} catch (AssertionError timedOut) {
+			// Reported by the check below.
+		}
+		this.check("dither target request is answered without a capture (" + answer.get() + ")", "none".equals(answer.get()));
 		this.checkScreenshotColor(context);
 		this.check("screenshot of the title screen works without the dither pass", hasDetail(screenshot(context, "01_failed_title")));
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
@@ -400,6 +426,84 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	}
 
 	/**
+	 * The HDR brightness expansion must reach the screen but never screenshots, which are 8-bit SDR
+	 * images, in the world and with the pause menu open (whose blur reads the main target).
+	 * On screen, Linear at 1000/203 nits multiplies the world by about 4.9; behind the pause menu
+	 * the menu's dark backdrop covers part of it, so less. In screenshots it must not show at all.
+	 */
+	private void checkHdrScreenshots(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			// Without HDR nothing is expanded, and the comparison would pass without testing anything.
+			this.log("HDR not active: no expansion that screenshots could show");
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		int peak = config.hdrPeakNits;
+		int ui = config.hdrUiNits;
+		try {
+			context.runOnClient(minecraft -> {
+				config.hdrPeakNits = 1000;
+				config.hdrUiNits = 203;
+			});
+			for (boolean paused : new boolean[]{false, true}) {
+				int blursBefore = context.computeOnClient(minecraft -> HdrExpandPass.blursKept());
+				context.setScreen(() -> paused ? new PauseScreen(true) : null);
+				context.waitTicks(5);
+				if (paused) {
+					// The pause menu must really blur and keep its world, or the gain check below would
+					// be measuring something else.
+					this.check("pause menu blurs and keeps the world behind it for HDR", context.computeOnClient(minecraft -> HdrExpandPass.blursKept()) > blursBefore);
+				}
+				String where = paused ? "pause menu" : "world";
+				for (DeepColorConfig.HdrMapping tested : new DeepColorConfig.HdrMapping[]{DeepColorConfig.HdrMapping.LINEAR, DeepColorConfig.HdrMapping.HIGHLIGHTS}) {
+					// The sky keeps brightening for a while after "time set noon" (8% of pixels change
+					// within seconds), so each mapping is compared with an SDR image taken just before.
+					String name = (paused ? "paused_" : "") + tested.name().toLowerCase(Locale.ROOT);
+					context.runOnClient(minecraft -> config.hdrMapping = DeepColorConfig.HdrMapping.NONE);
+					context.waitTicks(3);
+					double plainScreen = meanValue(capture(context, OutputProbe::captureDitherTarget));
+					BufferedImage plain = screenshot(context, "hdr_shot_none_before_" + name);
+					context.runOnClient(minecraft -> config.hdrMapping = tested);
+					context.waitTicks(3);
+					double expandedScreen = meanValue(capture(context, OutputProbe::captureDitherTarget));
+					BufferedImage shot = screenshot(context, "hdr_shot_" + name);
+					double changed = changedShare(plain, shot);
+					this.check(String.format(Locale.ROOT, "%s screenshot with %s HDR mapping matches the SDR image (%.2f%% of pixels differ)", where, tested, changed), changed < 2.0);
+					double gain = expandedScreen / plainScreen;
+					if (tested == DeepColorConfig.HdrMapping.LINEAR) {
+						this.check(String.format(Locale.ROOT, "%s on screen is expanded by Linear (mean %.2fx)", where, gain), gain > (paused ? 1.5 : 3.0));
+					} else {
+						this.log(String.format(Locale.ROOT, "%s on screen with Highlights: mean %.2fx", where, gain));
+					}
+				}
+			}
+		} finally {
+			context.setScreen(() -> null);
+			context.runOnClient(minecraft -> {
+				config.hdrMapping = mapping;
+				config.hdrPeakNits = peak;
+				config.hdrUiNits = ui;
+			});
+			context.waitTicks(3);
+		}
+	}
+
+	/** Mean brightness of a float capture (1.0 = SDR white on macOS, 80 nits on Windows). */
+	private static double meanValue(OutputProbe.Capture capture) {
+		if (capture == null) {
+			return Double.NaN;
+		}
+		double sum = 0.0;
+		for (int y = 0; y < capture.height(); y++) {
+			for (int x = 0; x < capture.width(); x++) {
+				sum += capture.value(x, y);
+			}
+		}
+		return sum / (capture.width() * capture.height());
+	}
+
+	/**
 	 * Share of pixels in the top 70% of the frame (no hotbar) whose green channel changed by more
 	 * than 4 of 255. 8-bit dither in screenshots changes a pixel by at most 2.
 	 */
@@ -499,6 +603,140 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		// Midtones: the expansion gain at half luminance is capped at 15%.
 		double gainAtHalf = 1.0 + (peak / ui - 1.0) * Math.pow(0.5, Math.max(4.0, Math.log((peak / ui - 1.0) / 0.15) / Math.log(2.0)));
 		this.check(String.format(Locale.ROOT, "midtone gain stays at 15%% (%.3f)", gainAtHalf), Math.abs(gainAtHalf - 1.15) < 0.005 || gainAtHalf < 1.15);
+	}
+
+	/**
+	 * The vanilla vignette at full strength (as in a dark cave) keeps only about 18% of the light in
+	 * the corners. That darkening is even and must not be mistaken for a mod overlay: the corners get
+	 * the same Linear gain as the rest of the world. Only the top corners are used, away from the
+	 * hotbar and chat.
+	 */
+	private void checkVignetteHdr(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		boolean vignette = context.computeOnClient(minecraft -> minecraft.options.vignette().get());
+		float brightness = context.computeOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness);
+		try {
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(true));
+			double none = this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			double linear = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			float expected = context.computeOnClient(minecraft -> Hdr.peakNits() / Hdr.uiNits());
+			double gain = linear / none;
+			this.check(String.format(Locale.ROOT, "corners under a full-strength vignette keep the Linear gain (%.2f of %.2f)", gain, expected),
+				gain > expected * 0.9 && gain < expected * 1.05);
+			// Behind the blurred pause menu the vignette is part of the blurred copy, so it must not
+			// be divided out a second time: the corners gain the same with and without it.
+			context.setScreen(() -> new PauseScreen(true));
+			context.waitTicks(5);
+			double pausedWith = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR)
+				/ this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(false));
+			double pausedWithout = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR)
+				/ this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			context.setScreen(() -> null);
+			this.check(String.format(Locale.ROOT, "pause menu corners gain the same with a full-strength vignette (%.2fx vs %.2fx without)", pausedWith, pausedWithout),
+				pausedWith > pausedWithout * 0.9 && pausedWith < pausedWithout * 1.1);
+		} finally {
+			context.setScreen(() -> null);
+			context.runOnClient(minecraft -> {
+				minecraft.options.vignette().set(vignette);
+				config.hdrMapping = mapping;
+				// Back where it was, or it would fade back during the screenshot comparisons that follow.
+				minecraft.gui.hud.vignetteBrightness = brightness;
+			});
+		}
+	}
+
+	/** Real nausea at reduced Distortion Effects must add light without removing world expansion. */
+	private void checkNauseaHdr(ClientGameTestContext context, TestSingleplayerContext world) {
+		if (!context.computeOnClient(minecraft -> Hdr.active())) {
+			return;
+		}
+		DeepColorConfig config = DeepColorConfig.get();
+		DeepColorConfig.HdrMapping mapping = config.hdrMapping;
+		double distortion = context.computeOnClient(minecraft -> minecraft.options.screenEffectScale().get());
+		boolean vignette = context.computeOnClient(minecraft -> minecraft.options.vignette().get());
+		float brightness = context.computeOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness);
+		// The probe reads red only. A gamut stretch mixes channels with negative weights (BT.2020
+		// takes about 0.6x green from red), so with nausea's green-tinted light a red-only ratio
+		// would not compare with peak / UI. The expansion itself runs before the stretch.
+		float gamut = config.hdrGamutStretch;
+		try {
+			context.runOnClient(minecraft -> {
+				minecraft.options.screenEffectScale().set(0.0);
+				minecraft.options.vignette().set(false);
+				config.hdrGamutStretch = 0.0F;
+			});
+			world.getServer().runCommand("effect give @p minecraft:nausea 30 0 true");
+			world.getConnection().waitForClientboundPackets();
+			context.waitTicks(60);
+			this.check("nausea regression exercises the real status effect",
+				context.computeOnClient(minecraft -> minecraft.player.hasEffect(net.minecraft.world.effect.MobEffects.NAUSEA)));
+			double[] none = this.worldStats(context, config, DeepColorConfig.HdrMapping.NONE);
+			double[] linear = this.worldStats(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			double expected = context.computeOnClient(minecraft -> Hdr.peakNits() / Hdr.uiNits());
+			double gain = linear[0] / none[0];
+			// Additive texture light stays at interface brightness, so the total gain can be
+			// slightly below peak/UI. The centre of the nausea texture is nearly black.
+			this.check(String.format(Locale.ROOT, "nausea at 0%% Distortion Effects retains world expansion (%.2fx of %.2fx)", gain, expected),
+				gain > expected * 0.85 && gain < expected * 1.05);
+			context.takeScreenshot("03d_hdr_nausea");
+			context.setScreen(BlackAndWhiteScreen::new);
+			context.waitTicks(3);
+			OutputProbe.Capture ui = capture(context, OutputProbe::captureDitherTarget);
+			double white = context.computeOnClient(minecraft -> Hdr.uiNits() / Hdr.unitNits());
+			this.check("opaque interface over nausea stays at interface brightness",
+				Math.abs(ui.value(ui.width() * 3 / 4, ui.height() / 2) / white - 1.0) < 0.01
+					&& ui.value(ui.width() / 4, ui.height() / 2) == 0.0F);
+			context.setScreen(() -> null);
+			// With the vignette as well: nausea's colored light makes the pixel uneven, which must
+			// not drop the vignette's darkening and expand the dark corners at full brightness.
+			context.runOnClient(minecraft -> minecraft.options.vignette().set(true));
+			double cornerNone = this.cornerMean(context, config, DeepColorConfig.HdrMapping.NONE);
+			double cornerLinear = this.cornerMean(context, config, DeepColorConfig.HdrMapping.LINEAR);
+			double cornerGain = cornerLinear / cornerNone;
+			this.check(String.format(Locale.ROOT, "nausea under a full-strength vignette keeps the corners within the Linear gain (%.2fx of %.2fx)", cornerGain, expected),
+				cornerGain > 1.5 && cornerGain < expected * 1.05);
+		} finally {
+			context.setScreen(() -> null);
+			world.getServer().runCommand("effect clear @p minecraft:nausea");
+			world.getConnection().waitForClientboundPackets();
+			context.waitTicks(30);
+			context.runOnClient(minecraft -> {
+				minecraft.options.screenEffectScale().set(distortion);
+				minecraft.options.vignette().set(vignette);
+				minecraft.gui.hud.vignetteBrightness = brightness;
+				config.hdrMapping = mapping;
+				config.hdrGamutStretch = gamut;
+			});
+		}
+	}
+
+	/** Mean brightness of the outer 1/8 of the two top corners, with the vignette pinned at full strength. */
+	private double cornerMean(ClientGameTestContext context, DeepColorConfig config, DeepColorConfig.HdrMapping mapping) {
+		context.runOnClient(minecraft -> {
+			config.hdrMapping = mapping;
+			// Moves 1% per tick toward the light level, so it stays near full over the few ticks below.
+			minecraft.gui.hud.vignetteBrightness = 1.0F;
+		});
+		context.waitTicks(3);
+		context.runOnClient(minecraft -> minecraft.gui.hud.vignetteBrightness = 1.0F);
+		OutputProbe.Capture capture = capture(context, OutputProbe::captureDitherTarget);
+		int w = capture.width() / 8;
+		int h = capture.height() / 8;
+		double sum = 0.0;
+		int count = 0;
+		// Row 0 of a capture is the bottom of the screen.
+		for (int y = capture.height() - h; y < capture.height(); y++) {
+			for (int x = 0; x < w; x++) {
+				sum += capture.value(x, y) + capture.value(capture.width() - 1 - x, y);
+				count += 2;
+			}
+		}
+		return sum / count;
 	}
 
 	private double[] worldStats(ClientGameTestContext context, DeepColorConfig config, DeepColorConfig.HdrMapping mapping) {
@@ -660,7 +898,14 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			OutputProbe.Capture full = capture(context, OutputProbe::captureDitherTarget);
 			this.log("full-screen strip " + strip + ": " + distinctInRow(full, full.height() / 2) + " distinct codes");
 			if (strip == 3) {
+				// Averaged over frames: at 10 bits the darkest levels span only a few pixel columns,
+				// and one frame's noise alone would move the mean by about the limit.
 				double darkBias = darkEndBias(full, ditherBits);
+				for (int i = 0; i < 2; i++) {
+					context.waitTicks(1);
+					darkBias += darkEndBias(capture(context, OutputProbe::captureDitherTarget), ditherBits);
+				}
+				darkBias /= 3.0;
 				this.check(String.format(Locale.ROOT, "dither keeps the darkest shades at their true level (%+.3f LSB)", darkBias), Math.abs(darkBias) < 0.03);
 			}
 		}
@@ -687,16 +932,26 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			}
 		} else {
 			this.log("Vulkan swapchain images have no TRANSFER_SRC usage, back buffer not readable");
+			// A request must still be answered (with nothing), or whatever waits for it never ends.
+			AtomicReference<String> answer = new AtomicReference<>();
+			context.runOnClient(minecraft -> OutputProbe.captureBackBuffer(capture -> answer.set(capture == null ? "none" : "a capture")));
+			context.waitFor(minecraft -> answer.get() != null, 60);
+			this.check("Vulkan back buffer request is answered without a capture (" + answer.get() + ")", "none".equals(answer.get()));
 		}
 		context.setScreen(() -> new TitleScreen());
 		context.waitTicks(3);
 	}
 
+	/** The capture, or null when the probe answered without one or never answered. */
 	private static OutputProbe.Capture capture(ClientGameTestContext context, Consumer<Consumer<OutputProbe.Capture>> request) {
 		AtomicReference<OutputProbe.Capture> result = new AtomicReference<>();
-		context.runOnClient(minecraft -> request.accept(result::set));
+		AtomicBoolean answered = new AtomicBoolean();
+		context.runOnClient(minecraft -> request.accept(capture -> {
+			result.set(capture);
+			answered.set(true);
+		}));
 		try {
-			context.waitFor(minecraft -> result.get() != null, 60);
+			context.waitFor(minecraft -> answered.get(), 60);
 		} catch (AssertionError timedOut) {
 			return null;
 		}
@@ -774,9 +1029,11 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		double bias = 0.0;
 		int counted = 0;
 		// The ramp starts with a sliver of true black (BLACK_EDGE in dither.fsh), which is left out.
+		// The first two levels: the last step before black, where the noise changes shape, and the
+		// one above it, which gives the 10-bit ramp enough columns for a steady mean.
 		for (int x = (int) Math.ceil(capture.width() * 0.004) + 1; ; x++) {
 			double ideal = (x + 0.5) / capture.width() * 32.0 / 255.0 * levels;
-			if (ideal >= 1.0) {
+			if (ideal >= 2.0) {
 				break;
 			}
 			double sum = 0.0;

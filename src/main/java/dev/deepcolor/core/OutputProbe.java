@@ -5,7 +5,9 @@ import com.mojang.renderpearl.api.GpuFormat;
 import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.textures.GpuTexture;
+import dev.deepcolor.DeepColor;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.jspecify.annotations.Nullable;
 
@@ -31,36 +33,76 @@ public final class OutputProbe {
 
 	private static final int BUFFER_USAGE = GpuBuffer.USAGE_MAP_READ | GpuBuffer.USAGE_COPY_DST;
 
-	private static @Nullable Consumer<Capture> pendingTarget;
-	private static @Nullable Consumer<Capture> pendingBackBuffer;
+	private static @Nullable Consumer<@Nullable Capture> pendingTarget;
+	private static @Nullable Consumer<@Nullable Capture> pendingBackBuffer;
 
 	private OutputProbe() {
 	}
 
-	/** Captures the dither target on the next frame. Works on both backends. */
-	public static void captureDitherTarget(Consumer<Capture> callback) {
+	/**
+	 * Captures the dither target on the next frame. Works on both backends. The callback gets null
+	 * when the frame has no dither target (the pass was skipped or has failed), so that nothing waits
+	 * for it forever.
+	 */
+	public static void captureDitherTarget(Consumer<@Nullable Capture> callback) {
 		pendingTarget = callback;
 	}
 
-	/** Captures the OpenGL back buffer after the next blit. Vulkan swapchain images cannot be read. */
-	public static void captureBackBuffer(Consumer<Capture> callback) {
+	/**
+	 * Captures the OpenGL back buffer after the next blit. Vulkan swapchain images cannot be read, so
+	 * there the callback gets null, so that nothing waits for it forever.
+	 */
+	public static void captureBackBuffer(Consumer<@Nullable Capture> callback) {
 		pendingBackBuffer = callback;
 	}
 
 	static void onFramePresented(@Nullable GpuTexture target, int bits) {
-		Consumer<Capture> callback = pendingTarget;
-		if (callback == null || target == null) {
+		Consumer<@Nullable Capture> callback = pendingTarget;
+		if (callback == null) {
 			return;
 		}
 		pendingTarget = null;
+		if (target == null) {
+			callback.accept(null);
+			return;
+		}
 		int width = target.getWidth(0);
 		int height = target.getHeight(0);
 		GpuFormat format = target.getFormat();
-		GpuBuffer buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
+		// The buffer and the answer belong to whichever side claims them first: the copy callback
+		// (which may run inside copyTextureToBuffer, or later if the copy was queued) or the failure
+		// path below (if copyTextureToBuffer throws). The other side then does nothing, so the buffer
+		// is closed once and the caller answered once, in every order.
+		AtomicBoolean claimed = new AtomicBoolean();
+		GpuBuffer buffer = null;
+		try {
+			buffer = RenderSystem.getDevice().createBuffer(() -> "Deep Color probe", BUFFER_USAGE, (long) width * height * format.blockSize());
+			copyAndAnswer(target, buffer, width, height, format, bits, callback, claimed);
+		} catch (RuntimeException e) {
+			if (!claimed.compareAndSet(false, true)) {
+				// The callback already ran and answered; only its own failure can get here.
+				DeepColor.LOGGER.warn("The dither target readback callback failed", e);
+				return;
+			}
+			// Setting up the readback failed: free what exists and still answer. A copy queued
+			// before the failure finds the claim taken and leaves the buffer alone.
+			DeepColor.LOGGER.warn("Could not start reading back the dither target", e);
+			if (buffer != null) {
+				buffer.close();
+			}
+			callback.accept(null);
+		}
+	}
+
+	private static void copyAndAnswer(GpuTexture target, GpuBuffer buffer, int width, int height, GpuFormat format, int bits, Consumer<@Nullable Capture> callback, AtomicBoolean claimed) {
 		RenderSystem.getDevice().createCommandEncoder().copyTextureToBuffer(target, buffer, 0L, () -> {
+			if (!claimed.compareAndSet(false, true)) {
+				return;
+			}
 			int[] red = new int[width * height];
 			float[] values = format == GpuFormat.RGBA16_FLOAT ? new float[width * height] : null;
-			try (GpuBufferSlice.MappedView view = buffer.map(true, false)) {
+			// The buffer goes away whatever happens, and the callback always gets an answer.
+			try (buffer; GpuBufferSlice.MappedView view = buffer.map(true, false)) {
 				ByteBuffer data = view.data();
 				int mask = bits == 10 ? 0x3FF : 0xFF;
 				for (int i = 0; i < red.length; i++) {
@@ -71,21 +113,24 @@ public final class OutputProbe {
 						red[i] = data.getInt(i * 4) & mask;
 					}
 				}
+			} catch (RuntimeException e) {
+				DeepColor.LOGGER.warn("Could not read back the dither target", e);
+				callback.accept(null);
+				return;
 			}
-			buffer.close();
 			callback.accept(new Capture("dither target (" + format + ")", bits, width, height, red, values));
 		}, 0);
 	}
 
 	/** Runs right after the backend blit, while the frame is still in the back buffer. */
 	public static void afterBlit(int width, int height) {
-		Consumer<Capture> callback = pendingBackBuffer;
+		Consumer<@Nullable Capture> callback = pendingBackBuffer;
 		if (callback == null) {
 			return;
 		}
 		pendingBackBuffer = null;
-		if (OutputState.isOpenGl()) {
-			callback.accept(new Capture("OpenGL back buffer", 10, width, height, GlOutput.readBackBufferRed(width, height), null));
-		}
+		callback.accept(OutputState.isOpenGl()
+			? new Capture("OpenGL back buffer", 10, width, height, GlOutput.readBackBufferRed(width, height), null)
+			: null);
 	}
 }

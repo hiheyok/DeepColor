@@ -1,5 +1,6 @@
 package dev.deepcolor.core;
 
+import dev.deepcolor.DeepColor;
 import java.util.Random;
 
 /**
@@ -13,6 +14,8 @@ final class BlueNoise {
 	static final int SIZE = 64;
 	private static final double SIGMA = 1.5;
 	private static final int RADIUS = 6;
+	/** About six times the 158 moves the real relaxation needs. */
+	private static final int MAX_RELAXATION_MOVES = 1000;
 
 	private final double[] energy = new double[SIZE * SIZE];
 	private final boolean[] set = new boolean[SIZE * SIZE];
@@ -41,16 +44,27 @@ final class BlueNoise {
 				placed++;
 			}
 		}
-		// Relax the random start: move the tightest cluster into the largest void until stable.
-		while (true) {
+		// Relax the random start: move the tightest cluster into the largest void until stable. That
+		// takes 158 moves for this size and seed. Another size, sigma or seed could instead swap a
+		// point back and forth forever, so a move that undoes the previous one ends it too, and a cap
+		// a few times the real count stops anything else. The points are well spread by then.
+		int previousCluster = -1;
+		int previousVoid = -1;
+		int move = 0;
+		for (; move < MAX_RELAXATION_MOVES; move++) {
 			int cluster = this.extreme(true);
 			this.toggle(cluster, false);
 			int voidIndex = this.extreme(false);
-			if (voidIndex == cluster) {
+			if (voidIndex == cluster || (cluster == previousVoid && voidIndex == previousCluster)) {
 				this.toggle(cluster, true);
 				break;
 			}
 			this.toggle(voidIndex, true);
+			previousCluster = cluster;
+			previousVoid = voidIndex;
+		}
+		if (move == MAX_RELAXATION_MOVES) {
+			DeepColor.LOGGER.warn("Blue noise relaxation stopped after {} moves without settling", move);
 		}
 
 		int[] rank = new int[SIZE * SIZE];

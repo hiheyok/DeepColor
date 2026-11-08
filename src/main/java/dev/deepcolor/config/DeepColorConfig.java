@@ -133,6 +133,8 @@ public final class DeepColorConfig {
 	/** Low enough to match a dim SDR setup, which can sit around 60 to 80 nits. */
 	public static final int MIN_UI_NITS = 40;
 	public static final int MAX_UI_NITS = 600;
+	/** The reference white for SDR content inside HDR (ITU-R BT.2408). */
+	public static final int DEFAULT_UI_NITS = 203;
 	public static final int MIN_PEAK_NITS = 200;
 	public static final int MAX_PEAK_NITS = 2000;
 	/** hdrGamma value meaning the piecewise sRGB curve, which Windows uses for SDR apps in HDR mode. */
@@ -158,7 +160,7 @@ public final class DeepColorConfig {
 	 * 203 nits is the reference white for SDR content inside HDR (ITU-R BT.2408). 0 means the SDR
 	 * white level set by the Windows slider instead (SDR white on macOS).
 	 */
-	public int hdrUiNits = 203;
+	public int hdrUiNits = DEFAULT_UI_NITS;
 	/** 0 means the peak the system reports for the display (EDR headroom on macOS). */
 	public int hdrPeakNits = 0;
 	public HdrMapping hdrMapping = HdrMapping.HIGHLIGHTS;

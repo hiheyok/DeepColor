@@ -8,48 +8,110 @@ import com.mojang.renderpearl.api.device.GpuDevice;
 import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
 import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import com.mojang.renderpearl.api.textures.GpuTextureView;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
-import java.nio.ByteBuffer;
 import java.util.Optional;
-import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.Nullable;
-import org.lwjgl.system.MemoryStack;
 
 /**
- * Lifts the finished world into the brightness range above SDR white, before the interface is drawn.
- * The main target is 16-bit float, so it can hold those values until the final pass encodes them.
+ * Prepares the world for HDR brightness expansion, which the final pass applies when the frame is
+ * shown. The main target itself keeps the plain SDR image throughout, so everything that reads it
+ * (screenshots, world icons, the menu blur) sees what it would without HDR.
+ *
+ * <p>Runs once the world is finished and before the interface is drawn: it keeps a copy of the world
+ * and sets the main target's alpha to 0. Interface drawn afterwards blends over the world and raises
+ * alpha by how much it covers. The final pass then knows, per pixel, how much of it is world and
+ * adds that share of the expansion. Additive nausea preserves coverage alpha and is flagged so
+ * its colored light is not mistaken for an untracked interface. Overlays that only darken the world without touching alpha
+ * are found by comparing with the copy, and darken the expanded world the same way. The vanilla
+ * vignette is not guessed: its color is recorded when it is drawn and the final pass divides it out
+ * exactly.
+ *
+ * <p>Known limit of this design: until the final pass, the world has alpha 0 in the main target. Its
+ * colors are the plain SDR image, but a mod that reads the main target's alpha in that window (a
+ * replay or capture mod) sees the world as transparent. See issue #7 for drawing the interface into
+ * its own layer instead, which removes this.
  */
 public final class HdrExpandPass {
-	private static final int PUSH_CONSTANT_SIZE = 16;
 	/** Most a gray at half brightness may gain from highlight expansion. */
 	private static final float MIDTONE_GAIN = 0.15F;
-	private static final int USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
-	private static final RenderPipeline PIPELINE = RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
-		.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "pipeline/hdr_expand"))
+	private static final int WORLD_USAGE = GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_TEXTURE_BINDING;
+	private static final RenderPipeline MARK_WORLD = RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
+		.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "pipeline/world_alpha"))
 		.withVertexShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "fullscreen"))
-		.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "hdr_expand"))
-		.withBindGroupLayout(BindGroupLayouts.IN_SAMPLER)
+		.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "world_alpha"))
 		.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
-		.withPushConstantSize(PUSH_CONSTANT_SIZE)
-		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALL))
+		.withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA16_FLOAT, ColorTargetState.WRITE_ALPHA))
 		.build();
+	private static final RenderPipeline MARK_OPAQUE = opaquePipeline("pipeline/opaque_alpha", GpuFormat.RGBA16_FLOAT);
+	private static final RenderPipeline MARK_OPAQUE_8 = opaquePipeline("pipeline/opaque_alpha_8", GpuFormat.RGBA8_UNORM);
 
-	private static @Nullable GpuTexture scratch;
-	private static @Nullable GpuTextureView scratchView;
+	/** The world as it was when the interface started drawing. */
+	private static @Nullable GpuTexture world;
+	private static @Nullable GpuTextureView worldView;
+	/** When the world copy was last used, from System.nanoTime(). */
+	private static long lastUsedNanos;
+	/** Unused this long, the world copy is freed; 66 MB at 4K. Time, not frames, so frame rate does not matter. */
+	private static final long FREE_AFTER_NANOS = 10_000_000_000L;
+
+	/**
+	 * What this frame did to the main target. Null on a frame that did not mark its world. Created
+	 * as soon as alpha is cleared, before anything else can fail, so a marked frame can always be
+	 * made opaque again. Replaced at the start of every frame, so nothing carries over.
+	 */
+	private record Frame(GpuTexture target, GpuTextureView view, boolean expandable, float boost, DeepColorConfig.HdrMapping mapping) {
+		Frame withoutExpansion() {
+			return new Frame(this.target, this.view, false, this.boost, this.mapping);
+		}
+	}
+
+	private static @Nullable Frame frame;
+	/** Counts menu blurs that kept a world to expand, for tests. */
+	private static int blursKept;
 	private static boolean failed;
+	private static boolean additiveOverlay;
+	/** The ARGB color the vanilla vignette was recorded with for this frame, 0 when it is not drawn. */
+	private static int vignetteColor;
 	private static boolean warnedFormat;
 
 	private HdrExpandPass() {
 	}
 
+	/** At the start of every frame, with or without a world. */
+	public static void frameStarted() {
+		frame = null;
+		additiveOverlay = false;
+		if (world != null && System.nanoTime() - lastUsedNanos > FREE_AFTER_NANOS) {
+			close();
+		}
+	}
+
+	/** At the start of recording the frame's interface, before render(). */
+	public static void extractStarted() {
+		vignetteColor = 0;
+	}
+
+	/** The vanilla vignette is drawn this frame with this ARGB color (see HudMixin). */
+	public static void vignetteExtracted(int argb) {
+		vignetteColor = argb;
+	}
+
+	/** Called when the full-screen additive nausea pipeline is bound after marking the world. */
+	public static void additiveOverlayDrawn() {
+		if (frame != null) {
+			additiveOverlay = true;
+		}
+	}
+
+	/** After the post effects, before the interface. Only reached on frames that render a world. */
 	public static void apply(RenderTarget main) {
+		// frame is already null here: frameStarted ran at the start of this frame.
 		DeepColorConfig config = DeepColorConfig.get();
-		if (failed || config.hdrMapping == DeepColorConfig.HdrMapping.NONE || !Hdr.active()) {
+		// Without the final pass, alpha 0 would reach the window, so never mark the world then.
+		if (failed || DitherPass.failed() || config.hdrMapping == DeepColorConfig.HdrMapping.NONE || !Hdr.active()) {
 			return;
 		}
 		GpuTexture color = main.getColorTexture();
@@ -69,38 +131,115 @@ public final class HdrExpandPass {
 			return;
 		}
 		try {
-			render(colorView, color, boost, config);
+			int width = color.getWidth(0);
+			int height = color.getHeight(0);
+			GpuDevice device = RenderSystem.getDevice();
+			if (world == null || world.getWidth(0) != width || world.getHeight(0) != height) {
+				close();
+				world = device.createTexture(() -> "Deep Color world for HDR expansion", WORLD_USAGE, GpuFormat.RGBA16_FLOAT, width, height, 1, 1);
+				worldView = device.createTextureView(world);
+			}
+			try (RenderPass pass = device.createCommandEncoder().createRenderPass(() -> "Deep Color mark world", colorView, Optional.empty())) {
+				pass.setPipeline(ModPipelines.get(MARK_WORLD));
+				pass.draw(3, 1, 0, 0);
+			}
+			// Alpha is cleared from here on, so the frame is recorded before anything else can fail. If
+			// the copy below fails, the catch makes the target opaque again and drops the frame.
+			frame = new Frame(color, colorView, true, boost, config.hdrMapping);
+			// Copied after marking, so the copy's alpha is 0 too. After a menu blur the copy is
+			// replaced and its alpha then says where interface was blurred into it (see afterBlur).
+			device.createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, width, height);
+			lastUsedNanos = System.nanoTime();
 		} catch (RuntimeException e) {
 			failed = true;
 			DeepColor.LOGGER.error("Brightness expansion failed and is now disabled", e);
+			restoreOpaque();
 		}
 	}
 
-	private static void render(GpuTextureView source, GpuTexture destination, float boost, DeepColorConfig config) {
-		int width = source.getWidth(0);
-		int height = source.getHeight(0);
-		GpuDevice device = RenderSystem.getDevice();
-		if (scratch == null || scratch.getWidth(0) != width || scratch.getHeight(0) != height) {
-			close();
-			scratch = device.createTexture(() -> "Deep Color HDR expansion", USAGE, GpuFormat.RGBA16_FLOAT, width, height, 1, 1);
-			scratchView = device.createTextureView(scratch);
+	/**
+	 * After the menu blur, which blurs the main target in place: the world copy no longer lines up
+	 * with it, so the blurred image becomes the world copy. Its alpha is blurred too, so the world
+	 * stays marked, and the world behind the menu keeps its HDR brightness. Interface drawn before
+	 * the blur (hotbar, chat, crosshair) is blurred into the copy as well; the copy's alpha says
+	 * where, and the final pass leaves those pixels unexpanded so blurred interface cannot glow.
+	 */
+	public static void afterBlur(RenderTarget main) {
+		Frame current = frame;
+		GpuTexture color = main.getColorTexture();
+		if (current == null || !current.expandable() || world == null || color != current.target()) {
+			return;
 		}
-		// A pass cannot read and write the same texture, so render to scratch and copy back.
-		try (RenderPass pass = device.createCommandEncoder().createRenderPass(() -> "Deep Color HDR expansion", scratchView, Optional.empty())) {
-			pass.setPipeline(ModPipelines.get(PIPELINE));
-			pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
-			try (MemoryStack stack = MemoryStack.stackPush()) {
-				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
-				constants.putFloat(boost);
-				constants.putFloat(highlightExponent(boost));
-				constants.putInt(config.hdrMapping == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 0 : 1);
-				constants.putFloat(config.hdrGamma);
-				constants.rewind();
-				pass.pushConstants(constants);
-			}
+		try {
+			RenderSystem.getDevice().createCommandEncoder().copyTextureToTexture(color, world, 0, 0, 0, 0, 0, color.getWidth(0), color.getHeight(0));
+			additiveOverlay = false;
+			// The vignette was drawn before the blur, so it is in the new copy already; dividing it
+			// out again in the final pass would darken the expansion twice.
+			vignetteColor = 0;
+			blursKept++;
+		} catch (RuntimeException e) {
+			frame = current.withoutExpansion();
+			DeepColor.LOGGER.error("Could not update the world copy after the menu blur", e);
+		}
+	}
+
+	/** Menu blurs so far that kept the world behind them expandable. For tests. */
+	public static int blursKept() {
+		return blursKept;
+	}
+
+	/** What the final pass needs to expand the world of the frame being shown. */
+	record Expansion(GpuTextureView world, float boost, float exponent, DeepColorConfig.HdrMapping mapping, boolean additiveOverlay, int vignetteColor) {
+	}
+
+	/**
+	 * The expansion for the frame being shown, when it has a world copy and is shown from the main
+	 * target the copy was made for. The settings come with it, so nothing depends on call order.
+	 */
+	static @Nullable Expansion expansionForFrame(GpuTextureView shown) {
+		Frame current = frame;
+		GpuTextureView view = worldView;
+		if (current == null || !current.expandable() || view == null || shown.texture() != current.target()) {
+			return null;
+		}
+		return new Expansion(view, current.boost(), highlightExponent(current.boost()), current.mapping(), additiveOverlay, vignetteColor);
+	}
+
+	/**
+	 * Makes the main target opaque again when this frame marked the world but is shown without the
+	 * final pass (it failed): alpha 0 would otherwise let the world show through on a compositor
+	 * that uses the window's alpha.
+	 */
+	static void restoreOpaque() {
+		Frame current = frame;
+		frame = null;
+		if (current != null) {
+			makeOpaque(current.view());
+		}
+	}
+
+	/** Sets alpha to 1 everywhere, leaving color alone. For RGBA16_FLOAT and RGBA8_UNORM views. */
+	static void makeOpaque(GpuTextureView view) {
+		GpuFormat format = view.texture().getFormat();
+		if (format != GpuFormat.RGBA16_FLOAT && format != GpuFormat.RGBA8_UNORM) {
+			return;
+		}
+		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color opaque alpha", view, Optional.empty())) {
+			pass.setPipeline(ModPipelines.get(format == GpuFormat.RGBA8_UNORM ? MARK_OPAQUE_8 : MARK_OPAQUE));
 			pass.draw(3, 1, 0, 0);
+		} catch (RuntimeException e) {
+			DeepColor.LOGGER.error("Could not make the image opaque", e);
 		}
-		device.createCommandEncoder().copyTextureToTexture(scratch, destination, 0, 0, 0, 0, 0, width, height);
+	}
+
+	private static RenderPipeline opaquePipeline(String location, GpuFormat format) {
+		return RenderPipeline.builder(RenderPipeline.builder().buildSnippet())
+			.withLocation(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, location))
+			.withVertexShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "fullscreen"))
+			.withFragmentShader(Identifier.fromNamespaceAndPath(DeepColor.MOD_ID, "opaque_alpha"))
+			.withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+			.withColorTargetState(new ColorTargetState(Optional.empty(), format, ColorTargetState.WRITE_ALPHA))
+			.build();
 	}
 
 	/**
@@ -113,13 +252,15 @@ public final class HdrExpandPass {
 	}
 
 	public static void close() {
-		if (scratchView != null) {
-			scratchView.close();
-			scratchView = null;
+		frame = null;
+		lastUsedNanos = System.nanoTime();
+		if (worldView != null) {
+			worldView.close();
+			worldView = null;
 		}
-		if (scratch != null) {
-			scratch.close();
-			scratch = null;
+		if (world != null) {
+			world.close();
+			world = null;
 		}
 	}
 }

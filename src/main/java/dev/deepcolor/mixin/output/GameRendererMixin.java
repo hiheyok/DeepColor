@@ -13,11 +13,27 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(GameRenderer.class)
 abstract class GameRendererMixin {
+	/** The game records the interface (and so the vignette) here, before render(). */
+	@Inject(method = "extract", at = @At("HEAD"))
+	private void deepcolor$extractStarted(CallbackInfo ci) {
+		HdrExpandPass.extractStarted();
+	}
+
+	@Inject(method = "render()V", at = @At("HEAD"))
+	private void deepcolor$frameStarted(CallbackInfo ci) {
+		HdrExpandPass.frameStarted();
+	}
+
 	@Inject(
 		method = "render()V",
 		at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/GameRenderer;applyPostEffects()V", shift = At.Shift.AFTER)
 	)
 	private void deepcolor$expandWorldBrightness(CallbackInfo ci) {
 		HdrExpandPass.apply(((GameRenderer) (Object) this).mainRenderTarget());
+	}
+
+	@Inject(method = "processBlurEffect", at = @At("TAIL"))
+	private void deepcolor$afterBlur(CallbackInfo ci) {
+		HdrExpandPass.afterBlur(((GameRenderer) (Object) this).mainRenderTarget());
 	}
 }

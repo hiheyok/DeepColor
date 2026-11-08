@@ -162,6 +162,17 @@
 			]
 		},
 		{
+			"name": "gl-hdr-noedr",
+			"_comment": "macOS only: the view gets the linear color space but no EDR flag, so HDR must stay off. Elsewhere a plain forced-HDR run.",
+			"backend": "opengl",
+			"mods": "vanilla",
+			"jvmArgs": [
+				"-Ddeepcolor.test.forceScrgb=true",
+				"-Ddeepcolor.test.assumeHdr=true",
+				"-Ddeepcolor.test.noEdr=true"
+			]
+		},
+		{
 			"name": "gl-strength2",
 			"backend": "opengl",
 			"mods": "vanilla",

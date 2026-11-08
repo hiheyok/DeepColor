@@ -21,8 +21,10 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.ARGB;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -38,7 +40,8 @@ import org.lwjgl.system.MemoryUtil;
  * this pass converts the image to absolute brightness. See {@link Hdr}.
  */
 public final class DitherPass {
-	private static final int PUSH_CONSTANT_SIZE = 64;
+	private static final int PUSH_CONSTANT_SIZE = 96;
+	private static final Identifier VIGNETTE = Identifier.withDefaultNamespace("textures/misc/vignette.png");
 	private static final int TARGET_USAGE = GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT;
 	private static final double GOLDEN_RATIO = 0.6180339887498949;
 	/** For tests: makes every run of the pass fail, as a shader that does not compile would. */
@@ -46,6 +49,8 @@ public final class DitherPass {
 	private static final BindGroupLayout SAMPLERS = BindGroupLayout.builder()
 		.withUniform("InSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.withUniform("NoiseSampler", UniformType.COMBINED_IMAGE_SAMPLER)
+		.withUniform("WorldSampler", UniformType.COMBINED_IMAGE_SAMPLER)
+		.withUniform("VignetteSampler", UniformType.COMBINED_IMAGE_SAMPLER)
 		.build();
 
 	private static final RenderPipeline PIPELINE_8 = createPipeline("pipeline/dither_8", GpuFormat.RGBA8_UNORM);
@@ -64,9 +69,30 @@ public final class DitherPass {
 
 	/** Returns the view to present: the dither target, or the input if there is nothing to do. */
 	public static GpuTextureView apply(GpuTextureView source) {
-		if (failed) {
-			return source;
+		// Whatever path this takes, a waiting probe gets its answer: the target, or null.
+		try {
+			if (failed) {
+				// A frame may have marked its world with alpha 0 before the pass failed elsewhere (in
+				// a screenshot, say). It is shown as is, so it must be opaque.
+				HdrExpandPass.restoreOpaque();
+				return source;
+			}
+			return applyPass(source);
+		} finally {
+			GpuTexture presented = lastPresented;
+			lastPresented = null;
+			try {
+				OutputProbe.onFramePresented(presented, OutputState.bits());
+			} catch (RuntimeException e) {
+				DeepColor.LOGGER.warn("Output probe failed", e);
+			}
 		}
+	}
+
+	/** The dither target, when the pass ran for the frame being shown. */
+	private static @Nullable GpuTexture lastPresented;
+
+	private static GpuTextureView applyPass(GpuTextureView source) {
 		try {
 			OutputState.initialize();
 			Hdr.logChanges();
@@ -88,14 +114,19 @@ public final class DitherPass {
 			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
 			// screen keeps the dither depth: its dithered strip always dithers, to show what it does.
 			int quantizeBits = config.dither || gradientMode != 0 ? OutputState.ditherBits() : bits;
+			// The world to expand into HDR highlights, when this frame has one. Asked every frame, so
+			// it never carries over to frames without a world.
+			HdrExpandPass.Expansion expansion = HdrExpandPass.expansionForFrame(source);
 			render(source, Objects.requireNonNull(targetView), OutputState.isScrgb() ? Output.SCRGB : bits == 10 ? Output.TEN_BIT : Output.EIGHT_BIT,
-				quantizeBits, strength, offset, gradientMode);
-			OutputProbe.onFramePresented(target, bits);
+				quantizeBits, strength, offset, gradientMode, OutputState.isScrgb() ? expansion : null);
+			lastPresented = target;
 			return Objects.requireNonNull(targetView);
 		} catch (RuntimeException e) {
 			// Presenting the undithered image is always possible, so never let this take the game down.
 			failed = true;
 			DeepColor.LOGGER.error("Dither pass failed and is now disabled", e);
+			// The world may already be marked with alpha 0 for this frame, which is now shown as is.
+			HdrExpandPass.restoreOpaque();
 			return source;
 		}
 	}
@@ -114,6 +145,8 @@ public final class DitherPass {
 	 * with the game's own blit, which only lacks the dither.
 	 */
 	public static RenderTarget flattenForReadback(RenderTarget target) {
+		// The main target holds the plain SDR image also with HDR on (the expansion happens only when
+		// the frame is shown, see HdrExpandPass), so it can be read as it is.
 		GpuTextureView source = target.getColorTextureView();
 		if (source == null || source.texture().getFormat() == GpuFormat.RGBA8_UNORM) {
 			return target;
@@ -128,7 +161,7 @@ public final class DitherPass {
 		if (!failed) {
 			try {
 				DeepColorConfig config = DeepColorConfig.get();
-				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0);
+				render(source, destination, Output.EIGHT_BIT, 8, config.dither ? config.ditherStrength : 0.0F, 0.0F, 0, null);
 				return flattened;
 			} catch (RuntimeException e) {
 				failed = true;
@@ -145,6 +178,9 @@ public final class DitherPass {
 				pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 				pass.draw(3, 1, 0, 0);
 			}
+			// The copy keeps alpha, and with HDR on the world's alpha is 0. Vanilla screenshots force
+			// opacity, but other readers of this copy should not get a transparent world.
+			HdrExpandPass.makeOpaque(destination);
 			return flattened;
 		} catch (RuntimeException e) {
 			// A wrong-looking screenshot is still better than a crash.
@@ -171,7 +207,8 @@ public final class DitherPass {
 		}
 	}
 
-	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode) {
+	private static void render(GpuTextureView source, GpuTextureView destination, Output output, int ditherBits, float strength, float noiseOffset, int mode,
+		HdrExpandPass.@Nullable Expansion expansion) {
 		if (SIMULATE_FAILURE) {
 			throw new IllegalStateException("Simulated dither pass failure (deepcolor.test.failDither)");
 		}
@@ -185,6 +222,14 @@ public final class DitherPass {
 			var nearest = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
 			pass.setUniform("InSampler", source, nearest);
 			pass.setUniform("NoiseSampler", Objects.requireNonNull(noiseView), nearest);
+			HdrExpandPass.Expansion expand = hdrActive ? expansion : null;
+			// Every sampler must be bound; the noise stands in when there is no world to expand.
+			pass.setUniform("WorldSampler", expand != null ? expand.world() : noiseView, nearest);
+			// The vignette texture, sampled the way the game draws it, to divide the vignette out.
+			AbstractTexture vignette = expand != null && expand.vignetteColor() != 0
+				? Minecraft.getInstance().getTextureManager().getTexture(VIGNETTE) : null;
+			boolean vignetteBound = vignette != null;
+			pass.setUniform("VignetteSampler", vignetteBound ? vignette.getTextureView() : noiseView, vignetteBound ? vignette.getSampler() : nearest);
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				ByteBuffer constants = stack.calloc(PUSH_CONSTANT_SIZE);
 				constants.putFloat(lsb(ditherBits));
@@ -203,6 +248,14 @@ public final class DitherPass {
 				constants.putFloat(hdrActive ? config.hdrGamutStretch : 0.0F);
 				constants.putInt(config.hdrGamutTarget.ordinal());
 				constants.putFloat(Hdr.unitNits());
+				constants.putFloat(expand != null ? expand.boost() : 0.0F);
+				constants.putFloat(expand != null ? expand.exponent() : 0.0F);
+				constants.putInt(expand == null ? 0 : expand.mapping() == DeepColorConfig.HdrMapping.HIGHLIGHTS ? 1 : 2);
+				constants.putInt(expand != null && expand.additiveOverlay() ? 1 : 0);
+				int tint = vignetteBound ? expand.vignetteColor() : 0;
+				constants.putFloat(ARGB.red(tint) / 255.0F);
+				constants.putFloat(ARGB.green(tint) / 255.0F);
+				constants.putFloat(ARGB.blue(tint) / 255.0F);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

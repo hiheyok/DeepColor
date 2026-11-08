@@ -31,7 +31,9 @@ import org.lwjgl.sdl.SDLVideo;
 public final class Hdr {
 	public static final float SCRGB_NITS = 80.0F;
 	public static final float MACOS_SDR_WHITE_NITS = 203.0F;
-	private static final boolean MACOS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("mac");
+	private static final String OS_NAME = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+	private static final boolean MACOS = OS_NAME.startsWith("mac");
+	private static final String SYSTEM_NAME = MACOS ? "macOS" : OS_NAME.startsWith("windows") ? "Windows" : "The system";
 	private static final boolean FORCE_SCRGB = Boolean.getBoolean("deepcolor.test.forceScrgb");
 	private static final boolean ASSUME_HDR = Boolean.getBoolean("deepcolor.test.assumeHdr");
 	/** Used when the system does not report a peak, and for tests. */
@@ -51,6 +53,12 @@ public final class Hdr {
 	 * by more than a quarter.
 	 */
 	public static void logChanges() {
+		// Only of interest when HDR was asked for, also (and most of all) when it did not turn on, or
+		// while the float surface is still in use after the setting was turned off (until a restart).
+		// Otherwise skip the SDL queries every frame.
+		if (!requested() && !OutputState.isScrgb()) {
+			return;
+		}
 		long window = window();
 		int display = SDLVideo.SDL_GetDisplayForWindow(window);
 		String state = String.format(Locale.ROOT, "display HDR %s, window HDR %s, SDR white %.0f nits",
@@ -62,7 +70,7 @@ public final class Hdr {
 		if (!state.equals(lastState) || headroomMoved) {
 			lastState = state;
 			lastHeadroom = headroom;
-			DeepColor.LOGGER.info("{} reports: {}, headroom {}", MACOS ? "macOS" : "Windows", state, String.format(Locale.ROOT, "%.2f", headroom));
+			DeepColor.LOGGER.info("{} reports: {}, headroom {}", SYSTEM_NAME, state, String.format(Locale.ROOT, "%.2f", headroom));
 		}
 	}
 
@@ -124,7 +132,7 @@ public final class Hdr {
 	 * so turning Windows HDR off while playing falls back to a plain SDR image instead of clipping.
 	 */
 	public static boolean active() {
-		return OutputState.isScrgb() && (ASSUME_HDR || windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN));
+		return OutputState.hasHeadroom() && (ASSUME_HDR || windowBoolean(SDLVideo.SDL_PROP_WINDOW_HDR_ENABLED_BOOLEAN));
 	}
 
 	/** Brightness of SDR white, which is where the interface sits. */
