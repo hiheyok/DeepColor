@@ -320,6 +320,59 @@ every pixel walks evenly through its range and a few frames average out to the t
 the position instead, as version 1.0 did, made some frame pairs nearly repeat. The pass owns its own
 shader source and pipeline cache because the first frames are presented before resource packs load.
 
+## HDR performance measurements
+
+The opt-in benchmark runs **one game instance at a time**:
+
+```
+python tools/benchmark_hdr.py opengl vulkan
+```
+
+It compares the HDR shader before these changes (`d0a216b`, before PRs 8 and 9) against the current
+shader with effects Off, contrast 50%, noise 2/8, Smooth shadows, and aggressive combined settings.
+It requires that baseline revision in local Git history; `--baseline <revision>` selects another.
+The old shader is generated into test build output and is not shipped. Benchmark code and frame
+sampling also live only in the test mod. Runtime rendering code is unchanged by the benchmark.
+
+Each renderer is warmed up, then runs 20 interleaved samples of 16 individually completed draws per
+mode at 1920x1080 and 2560x1440. Dark, mixed-brightness and sub-floor images exercise different shader
+branches. Every draw completes before timing the next, preventing overwritten passes from being
+coalesced by a tile GPU. Input/output checks verify that the fixture actually renders. Timings are
+**CPU+GPU wall latency including submission and synchronization**, not pure GPU execution time.
+The M5's timestamp results were unavailable or inconsistent, so they are excluded from conclusions.
+
+Measured on 2026-11-08: Apple M5, 10 GPU cores, 32 GB, AC power, vanilla renderer. At 2560x1440 on
+the dark ramp, median completed-pass latencies were:
+
+| Configuration | OpenGL | Vulkan |
+| --- | --- | --- |
+| Historical HDR shader | 0.642 ms | 0.360 ms |
+| Current shader, effects Off | 0.645 ms | 0.422 ms |
+| Contrast 50% | 0.644 ms | 0.423 ms |
+| HDR noise 2 | 0.642 ms | 0.590 ms |
+| HDR noise 8 | 0.644 ms | 0.591 ms |
+| Smooth shadows | 0.645 ms | 0.584 ms |
+| Aggressive combined settings | 0.644 ms | 0.529 ms |
+
+OpenGL differences did not separate reliably from measurement noise. Vulkan shows about 0.06 ms
+additional latency with effects disabled versus the historical shader, and about 0.23 ms total
+additional latency with ordinary shadow noise on this dark image. Noise 2 versus 8 changes amplitude
+rather than algorithmic complexity, and had similar cost. On the mixed image the noise-2 increment
+versus historical HDR was about 0.13 ms. The pulse branch can bypass PQ noise calculations for dim
+pixels, so aggressive settings are not necessarily slower on every input.
+
+A stationary night-world check used four alternating blocks of at least 180 frame intervals per
+mode, with VSync and idle throttling disabled. At its small 854x480 render size, medians ranged from
+0.725–0.734 ms on OpenGL and 1.003–1.119 ms on Vulkan. This light, harness-driven scene is not a
+representative 1440p gameplay FPS test. Pass latency includes synchronization overhead and must not
+be added directly to a game's frame time. These results do not predict a Windows GPU or shader-pack
+workload. Calibration widgets exist only while that screen is open; the P probe performs an explicit
+readback rather than continuous sampling.
+
+[Aggregated samples and paired timing intervals](tools/performance-results/apple-m5-hdr-2026-11-08.json)
+are retained with the benchmark. Full raw samples and logs are written to timestamped folders under
+`run/performance/`; no simultaneous benchmark instances are started.
+
 ## Development
 
 The client gametest drives the real game and reads real output pixels. The fastest way to run all of

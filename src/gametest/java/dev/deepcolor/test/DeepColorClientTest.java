@@ -61,6 +61,10 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	public void runTest(ClientGameTestContext context) {
 		context.waitForScreen(TitleScreen.class);
 		context.waitTicks(10);
+		if (Boolean.getBoolean("deepcolor.test.benchmark")) {
+			dev.deepcolor.core.HdrPerformanceBenchmark.run(context);
+			return;
+		}
 		if (DeepColor.isDisabledByHdrMod()) {
 			this.checkDisabled(context);
 			this.finish(context);
