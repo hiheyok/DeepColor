@@ -33,6 +33,8 @@ layout(push_constant) uniform DeepColorParams {
     float shadowDither;
     float shadowContrast;
     float shadowContrastRange;
+    int floorDither;
+    float calibrationPanel;
 };
 #else
 uniform float ditherLsb;
@@ -60,6 +62,8 @@ uniform float vignetteBlue;
 uniform float shadowDither;
 uniform float shadowContrast;
 uniform float shadowContrastRange;
+uniform int floorDither;
+uniform float calibrationPanel;
 #endif
 
 layout(location = 0) in vec2 texCoord;
@@ -329,6 +333,13 @@ vec3 ditherHdrShadows(vec3 light, vec2 pixel) {
     if (nits <= 0.0 || nits >= 10.0) {
         return light;
     }
+    // Below a measured panel floor, symmetric noise may never reach a visible code. Stochastic
+    // pulses above that floor retain the intended linear-light mean without lighting true black.
+    float pulse = min(floorScale * (1.0 + shadowDither), peakScale * luminance / max(max(light.r, max(light.g, light.b)), 1e-10));
+    bool useFloor = floorDither == 1 && floorScale > 0.0 && pulse > floorScale;
+    if (useFloor && luminance < pulse) {
+        return uniformNoise(pixel) < luminance / pulse ? light * (pulse / luminance) : vec3(0.0);
+    }
     float code = pqEncode(nits);
     float radius = shadowDither / 1023.0;
     float amplitude = min(nits - pqDecode(max(0.0, code - radius)), pqDecode(code + radius) - nits);
@@ -337,6 +348,11 @@ vec3 ditherHdrShadows(vec3 light, vec2 pixel) {
     float peakRoom = nits * max(0.0, peakScale / max(largest, 1e-10) - 1.0);
     amplitude = max(0.0, min(amplitude, min(0.95 * nits, peakRoom)));
     amplitude *= 1.0 - smoothstep(1.0, 10.0, nits);
+    if (useFloor) {
+        amplitude = min(amplitude, max(0.0, (luminance - floorScale) * unitNits));
+        // Match the vanishing pulse variance at the upper end of the stochastic region.
+        amplitude *= smoothstep(pulse, 2.0 * pulse, luminance);
+    }
     return light * (1.0 + triangular(uniformNoise(pixel)) * amplitude / nits);
 }
 
@@ -354,7 +370,8 @@ const float STEP_CODES[8] = float[8](2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 255
 
 vec3 stepChart() {
     float cell = texCoord.x * 8.0;
-    if (fract(cell) < 0.1 || texCoord.y < 0.3 || texCoord.y > 0.7) {
+    float chartY = (texCoord.y - calibrationPanel) / (1.0 - calibrationPanel);
+    if (fract(cell) < 0.1 || chartY < 0.3 || chartY > 0.7) {
         return vec3(0.0);
     }
     return vec3(STEP_CODES[int(min(cell, 7.0))] / 255.0);
@@ -377,7 +394,7 @@ vec3 hdrPattern(int strip) {
         }
         return vec3(PATCH_NITS[int(min(cell, 7.0))] / unitNits);
     }
-    return encodeScrgb(vec3(x * GRADIENT_MAX));
+    return encodeScrgb(vec3(x < BLACK_EDGE ? 0.0 : x * GRADIENT_MAX));
 }
 
 // Debug gradient, generated here because anything drawn through the GUI has 8-bit vertex colors.
@@ -410,6 +427,12 @@ void main() {
     }
     vec2 pixel = floor(gl_FragCoord.xy);
 
+    if (mode != 0 && calibrationPanel > 0.0 && texCoord.y < calibrationPanel) {
+        // The controls occupy the bottom of the input image. Do not draw a test ramp under them.
+        fragColor = vec4(encoding == 1 ? encodeScrgb(max(color, 0.0)) : toLevels(clamp(color, 0.0, 1.0), outputLsb), 1.0);
+        return;
+    }
+    float patternY = (texCoord.y - calibrationPanel) / (1.0 - calibrationPanel);
     if (encoding == 1) {
         // Float output stays unquantized. Optional shadow noise masks downstream banding.
         color = max(color, 0.0);
@@ -419,7 +442,7 @@ void main() {
             return;
         }
         if (mode != 0) {
-            int strip = mode == 1 ? 3 - int(clamp(texCoord.y, 0.0, 0.9999) * 4.0) : mode - 2;
+            int strip = mode == 1 ? 3 - int(clamp(patternY, 0.0, 0.9999) * 4.0) : mode - 2;
             if (hdrActive == 1) {
                 // The labels are drawn as white on black, so they add at interface brightness.
                 // Keep reference ramps/patches exact; game shadows preview contrast and noise.
@@ -443,7 +466,7 @@ void main() {
         fragColor = vec4(toLevels(dither(color, ditherLsb, strength, pixel), ditherLsb), 1.0);
     } else {
         // Mode 1 stacks all four strips, top to bottom. Modes 2 to 5 show one strip full screen.
-        int strip = mode == 1 ? 3 - int(clamp(texCoord.y, 0.0, 0.9999) * 4.0) : mode - 2;
+        int strip = mode == 1 ? 3 - int(clamp(patternY, 0.0, 0.9999) * 4.0) : mode - 2;
         // The screen draws black with white labels, so adding keeps the labels readable.
         fragColor = vec4(clamp(gradient(strip, pixel) + color, 0.0, 1.0), 1.0);
     }

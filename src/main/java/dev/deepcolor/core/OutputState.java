@@ -114,7 +114,7 @@ public final class OutputState {
 	 */
 	public static int ditherBits() {
 		if (scrgb) {
-			// Only the gradient test strips use this then. Float output is not dithered.
+			// Only the SDR comparison strips use this then. HDR noise is sized separately.
 			return 10;
 		}
 		return switch (DeepColorConfig.get().ditherBits) {
@@ -142,6 +142,7 @@ public final class OutputState {
 							config.temporal ? "temporal" : "static") : "")
 						+ (config.hdrShadowContrast > 0.0F ? String.format(Locale.ROOT, ", shadow contrast %.0f%% below %.2f nits",
 							config.hdrShadowContrast * 100, config.hdrShadowContrastRange) : "")
+						+ (config.hdrFloorDither && config.dither && config.hdrShadowDither > 0 && config.hdrShadowFloor > 0 ? ", floor dither" : "")
 						+ (config.hdrShadowFloor > 0.0F ? String.format(Locale.ROOT, ", floor %.3f nits", config.hdrShadowFloor) : "")
 						+ (config.hdrGamutStretch > 0.0F ? String.format(Locale.ROOT, ", gamut %.0f%% toward %s", config.hdrGamutStretch * 100,
 							switch (config.hdrGamutTarget) {

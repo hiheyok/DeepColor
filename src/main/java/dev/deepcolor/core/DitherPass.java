@@ -256,10 +256,12 @@ public final class DitherPass {
 				constants.putFloat(ARGB.red(tint) / 255.0F);
 				constants.putFloat(ARGB.green(tint) / 255.0F);
 				constants.putFloat(ARGB.blue(tint) / 255.0F);
-				// Offsets 88, 92 and 96; the block is padded to 112 bytes.
+				// Offsets 88 through 104; the block is padded to 112 bytes.
 				constants.putFloat(hdrActive && config.dither ? config.hdrShadowDither : 0.0F);
 				constants.putFloat(hdrActive ? config.hdrShadowContrast : 0.0F);
 				constants.putFloat(config.hdrShadowContrastRange);
+				constants.putInt(hdrActive && config.hdrFloorDither ? 1 : 0);
+				constants.putFloat(mode != 0 && Minecraft.getInstance().gui.screen() instanceof GradientScreen screen ? screen.calibrationPanelFraction() : 0.0F);
 				constants.rewind();
 				pass.pushConstants(constants);
 			}

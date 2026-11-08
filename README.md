@@ -127,6 +127,7 @@ What it does:
 | `hdrShadowFloor` | `0` (off) to `0.2` nits | `0` |
 | `hdrShadowContrast` | `0` (off) to `0.95` (95% near-black reduction) | `0` |
 | `hdrShadowContrastRange` | `0.1` to `20` nominal nits | `2` |
+| `hdrFloorDither` | `false`, `true` (panel-floor-aware noise) | `false` |
 | `hdrShadowDither` | `0` (off) to `8` nominal 10-bit PQ steps | `0` |
 | `hdrGamutStretch` | `0` (accurate sRGB) to `1` (fully stretched to the target) | `0` |
 | `hdrGamutTarget` | `p3`, `adobe`, `bt2020` | `p3` |
@@ -182,6 +183,31 @@ of Dithering and has no effect with HDR inactive. The game-shadow strip of `/dee
 previews both contrast and noise; the reference ramps, fixed-nit patches and grey chart bypass
 these two controls. SDR screenshots remain unchanged. Setting contrast to Off restores the
 previous output exactly.
+
+**Calibrating while viewing the ramp.** In **Open gradient test**, press **C** or click **Calibrate**.
+The game-shadow ramp stays visible above controls for gamma, floor, noise, contrast, contrast range
+and interface white. Dither, noise animation and **Floor dither** can be toggled here too. Values
+apply live and are saved when hiding the controls or leaving the screen. Keys 1–5 still switch test
+patterns; press C again to view the full-size ramp. RGB 0–32 covers only dark shades, so its right
+edge is dark grey. Key 5 is a separate chart that includes white.
+
+For stepped/crushed shadows, **Smooth shadows** starts at contrast Off, floor 0.01 nits, noise 2,
+Floor dither On, Dither On and animation On. This is a starting point, not a display calibration.
+Tune **White** to match overall brightness first, then **Floor** to the dimmest visible HDR patch,
+and adjust **Noise** while watching the first part of the ramp. Contrast reduction can worsen crush.
+
+Optional **Floor dither** (`hdrFloorDither`) uses the chosen shadow floor as the panel's minimum
+visible brightness. Below `floor * (1 + noise)`, it distributes light between zero and pulses at
+that brightness, preserving the intended linear-light average and true black. Above that region,
+normal noise blends in smoothly and stays above the measured floor. It requires active HDR,
+Dithering, a nonzero noise strength and nonzero floor. It defaults to Off. Grain or flicker may be
+visible, especially at low frame rates; it cannot recover upstream detail or guarantee a particular
+panel's response. Floor lifting still applies before this dither mode.
+
+With float output, **P** measures the number of actual output values in the first 20% of the game
+ramp and the lowest positive nominal brightness. This reads the mod's final target, not the panel.
+A large count there with visible steps on the monitor points to a later stage of the display path;
+with noise enabled it counts noisy output values too. macOS nits remain relative to display brightness.
 
 The peak Windows reports comes from the Windows HDR Calibration app or the monitor itself. On the
 AW2725DF it reports 1000 nits.

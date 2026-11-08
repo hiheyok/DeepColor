@@ -181,6 +181,8 @@ public final class DeepColorConfig {
 	public float hdrShadowFloor = 0.0F;
 	/** Optional near-black noise amplitude in nominal 10-bit PQ steps; 0 is off. */
 	public float hdrShadowDither = 0.0F;
+	/** Optional stochastic pulses above hdrShadowFloor to preserve sub-floor detail on OLED. */
+	public boolean hdrFloorDither = false;
 	/** Maximum fractional near-black reduction; 0 is off. Independent of dithering. */
 	public float hdrShadowContrast = 0.0F;
 	/** Brightness above which the contrast correction has no effect, in nominal nits. */

@@ -108,6 +108,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		this.checkEndpoints(context);
 		this.checkHdrShadowNoise(context);
 		this.checkHdrShadowContrast(context);
+		this.checkFloorDitherAndCalibration(context);
 		this.checkScreenshotColor(context);
 		this.checkReloadReleasesPipelines(context);
 
@@ -494,6 +495,96 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 				config.hdrGamma = savedGamma;
 				config.hdrUiNits = savedUi;
 				config.dither = savedDither;
+			});
+			context.setScreen(TitleScreen::new);
+			context.waitTicks(3);
+		}
+	}
+
+	private void checkFloorDitherAndCalibration(ClientGameTestContext context) {
+		if (!context.computeOnClient(minecraft -> OutputState.isScrgb())) return;
+		DeepColorConfig config = DeepColorConfig.get();
+		float floor = config.hdrShadowFloor, noise = config.hdrShadowDither, contrast = config.hdrShadowContrast, gamma = config.hdrGamma;
+		int white = config.hdrUiNits;
+		boolean enabled = config.dither, temporal = config.temporal, floorDither = config.hdrFloorDither;
+		try {
+			context.runOnClient(minecraft -> {
+				config.hdrGamma = 2.2F;
+				config.hdrUiNits = 203;
+				config.hdrShadowContrast = 0;
+				config.hdrShadowFloor = 0.01F;
+				config.hdrShadowDither = 0;
+				config.hdrFloorDither = true;
+				config.dither = true;
+				config.temporal = false;
+			});
+			context.setScreen(ShadowContrastScreen::new);
+			context.waitTicks(3);
+			OutputProbe.Capture plain = capture(context, OutputProbe::captureDitherTarget);
+			context.runOnClient(minecraft -> config.hdrShadowDither = 2);
+			context.waitTicks(3);
+			OutputProbe.Capture pulses = capture(context, OutputProbe::captureDitherTarget);
+			boolean active = context.computeOnClient(minecraft -> Hdr.active());
+			for (int patch = 1; patch <= 3; patch++) {
+				double sum = 0;
+				int count = 0, dark = 0, visible = 0, belowFloor = 0;
+				int start = (int) ((patch + 0.2) * pulses.width() / 32);
+				int end = (int) ((patch + 0.8) * pulses.width() / 32);
+				for (int y = pulses.height() / 4; y < pulses.height() * 3 / 4; y++) {
+					for (int x = start; x < end; x++) {
+						double nits = pulses.value(x, y) * Hdr.unitNits();
+						sum += nits;
+						count++;
+						if (nits == 0) dark++;
+						else if (nits >= 0.0099) visible++;
+						else belowFloor++;
+					}
+				}
+				double expected = plain.value((start + end) / 2, plain.height() / 2) * Hdr.unitNits();
+				this.check("floor dither retains mean brightness for shade " + patch, Math.abs(sum / count - expected) < Math.max(0.00005, expected * 0.10));
+				this.check("floor dither spans black and visible levels only when HDR active, shade " + patch,
+					active ? dark > 0 && visible > 0 && belowFloor == 0 : dark == 0);
+			}
+			this.check("floor dither preserves true black", pulses.value(2, pulses.height() / 2) == 0);
+			context.runOnClient(minecraft -> config.dither = false);
+			context.waitTicks(3);
+			OutputProbe.Capture disabled = capture(context, OutputProbe::captureDitherTarget);
+			this.check("master dither switch also disables floor pulses", Arrays.equals(plain.values(), disabled.values()));
+
+			GradientScreen screen = context.computeOnClient(minecraft -> new GradientScreen(null));
+			context.setScreen(() -> screen);
+			context.getInput().pressKey(InputConstants.KEY_C);
+			context.waitTicks(3);
+			this.check("live calibration reserves space below the gradient", screen.calibrationPanelFraction() > 0 && screen.calibrationPanelFraction() < 0.8F);
+			this.check("all live controls fit below the gradient", context.computeOnClient(minecraft -> screen.children().stream()
+				.filter(child -> child instanceof AbstractWidget)
+				.allMatch(child -> ((AbstractWidget) child).getY() >= screen.height * (1 - screen.calibrationPanelFraction())
+					&& ((AbstractWidget) child).getBottom() <= screen.height)));
+			context.takeScreenshot("02d_live_calibration");
+			OutputProbe.Capture calibration = capture(context, OutputProbe::captureDitherTarget);
+			int row = (int) ((screen.calibrationPanelFraction() + (1 - screen.calibrationPanelFraction()) * 0.5) * calibration.height());
+			Set<Float> levels = new HashSet<>();
+			for (int x = 0; x < calibration.width() / 5; x++) levels.add(calibration.value(x, row));
+			this.check("first 20 percent of game ramp has many real output levels", levels.size() > (active ? 64 : 8));
+			// Controls must still be ordinary UI, with no ramp leaking under the panel's empty margins.
+			this.check("calibration panel is black outside its widgets", calibration.value(1, 2) == 0);
+			context.getInput().pressKey(InputConstants.KEY_P);
+			context.waitTicks(3);
+			context.takeScreenshot("02e_live_probe");
+			context.getInput().pressKey(InputConstants.KEY_C);
+			context.waitTicks(3);
+			this.check("hiding calibration restores full-size gradient", screen.calibrationPanelFraction() == 0);
+		} finally {
+			context.runOnClient(minecraft -> {
+				config.hdrShadowFloor = floor;
+				config.hdrShadowDither = noise;
+				config.hdrShadowContrast = contrast;
+				config.hdrGamma = gamma;
+				config.hdrUiNits = white;
+				config.dither = enabled;
+				config.temporal = temporal;
+				config.hdrFloorDither = floorDither;
+				config.save();
 			});
 			context.setScreen(TitleScreen::new);
 			context.waitTicks(3);
