@@ -86,18 +86,22 @@ vec3 uniformNoise3(vec2 pixel) {
 }
 
 // Adds noise in units of the given step, keeping the mean of the rounded result equal to the input.
-// Triangular noise spans two steps, so in the last step at either end of the range it would be
-// clipped: a pure 0 would come out as a lifted, grainy floor, which is very visible on an OLED.
-// That last step uses uniform noise one step wide instead. It never reaches past the ends, so 0 and
-// 1 stay exact, and anything in between still averages to its true level: a quarter step above
-// black lights a quarter of the pixels. (Fading the triangular noise out instead rounded everything
-// below a quarter step to black and pulled the rest of the step too dark.)
+// Triangular noise spans two steps, so near either end of the range it would be clipped: a pure 0
+// would come out as a lifted, grainy floor, which is very visible on an OLED. So the noise never
+// reaches past the ends, at any strength:
+// - In the last step it is uniform and at most one step wide. 0 and 1 stay exact, and anything in
+//   between still averages to its true level: a quarter step above black lights a quarter of the
+//   pixels. (Fading the triangular noise out instead rounded everything below a quarter step to
+//   black and pulled the rest of the step too dark.)
+// - Above that the triangular noise is limited to the distance to the end, which only matters for
+//   strengths above 1.
 vec3 dither(vec3 color, float stepSize, float amount, vec2 pixel) {
     vec3 u = uniformNoise3(pixel);
     vec3 triangularNoise = vec3(triangular(u.r), triangular(u.g), triangular(u.b));
     vec3 headroom = min(color, 1.0 - color) / stepSize;
-    vec3 noise = mix(u - 0.5, triangularNoise, step(1.0, headroom));
-    return color + noise * stepSize * amount;
+    vec3 lastStep = (u - 0.5) * min(amount, 1.0);
+    vec3 inside = triangularNoise * min(vec3(amount), headroom);
+    return color + mix(lastStep, inside, step(1.0, headroom)) * stepSize;
 }
 
 // Rounds to levels of stepSize and writes them as output codes that land back on the same level

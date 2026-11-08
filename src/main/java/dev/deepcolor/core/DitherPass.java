@@ -21,8 +21,8 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.resources.Identifier;
-import org.joml.Vector4f;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -81,7 +81,8 @@ public final class DitherPass {
 
 			frame++;
 			ensureTarget(source, outputFormat);
-			float strength = config.dither ? config.ditherStrength : 0.0F;
+			// The gradient screen always dithers its dithered strip, at the configured strength.
+			float strength = config.dither || gradientMode != 0 ? config.ditherStrength : 0.0F;
 			float offset = config.temporal ? (float) ((frame * GOLDEN_RATIO) % 1.0) : 0.0F;
 			// The shader rounds to the dither depth. Without dither there is no reason to round coarser
 			// than the output, and doing so would turn a 10-bit image into 8-bit banding. The gradient
@@ -135,9 +136,15 @@ public final class DitherPass {
 			}
 		}
 		try {
-			// The blit blends, so start from opaque black: the copy then matches the target exactly.
-			RenderSystem.getDevice().createCommandEncoder().clearColorTexture(flattened.getColorTexture(), new Vector4f(0.0F, 0.0F, 0.0F, 1.0F));
-			target.blitAndBlendToTexture(destination, null);
+			// The game's plain screen copy. It does not blend, so pixels with alpha below 1 keep their
+			// color, as they do in the normal conversion (RenderTarget.blitAndBlendToTexture would
+			// multiply them by alpha).
+			try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(() -> "Deep Color readback copy", destination, Optional.empty())) {
+				pass.setPipeline(RenderSystem.getCompiledPipeline(RenderPipelines.TRACY_BLIT));
+				RenderSystem.bindDefaultUniforms(pass);
+				pass.setUniform("InSampler", source, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+				pass.draw(3, 1, 0, 0);
+			}
 			return flattened;
 		} catch (RuntimeException e) {
 			// A wrong-looking screenshot is still better than a crash.

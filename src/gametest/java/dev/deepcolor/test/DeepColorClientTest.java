@@ -1,11 +1,13 @@
 package dev.deepcolor.test;
 
+import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.GpuFormat;
 import dev.deepcolor.DeepColor;
 import dev.deepcolor.config.DeepColorConfig;
-import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.DitherPass;
+import dev.deepcolor.core.Formats;
 import dev.deepcolor.core.Hdr;
 import dev.deepcolor.core.OutputProbe;
 import dev.deepcolor.core.OutputState;
@@ -14,7 +16,6 @@ import dev.deepcolor.gui.DeepColorConfigScreen;
 import dev.deepcolor.gui.GradientScreen;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
-import javax.imageio.ImageIO;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -26,15 +27,21 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import javax.imageio.ImageIO;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
-import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.network.chat.Component;
+import org.joml.Vector4f;
 
 /**
  * Measures what the mod really outputs, on whichever backend and mod set the run was started with.
@@ -64,6 +71,8 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 		this.checkSodiumPage(context);
 
 		this.checkGradient(context);
+		this.checkEndpoints(context);
+		this.checkScreenshotColor(context);
 		this.checkReloadReleasesPipelines(context);
 
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
@@ -217,6 +226,7 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 	private void checkDitherFailure(ClientGameTestContext context) {
 		context.waitTicks(10);
 		this.check("dither pass switched itself off after failing", context.computeOnClient(minecraft -> DitherPass.failed()));
+		this.checkScreenshotColor(context);
 		this.check("screenshot of the title screen works without the dither pass", hasDetail(screenshot(context, "01_failed_title")));
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
 			world.getConnection().waitForChunksRender();
@@ -224,6 +234,72 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 			this.check("screenshot of the world works without the dither pass", hasDetail(screenshot(context, "02_failed_world")));
 		}
 		this.check("game still running after leaving the world", context.computeOnClient(minecraft -> minecraft.isRunning()));
+	}
+
+	/**
+	 * Pure black and pure white must come out exact through the real dithered path, at any
+	 * strength: noise there shows as a grainy floor or a speckled white.
+	 */
+	private void checkEndpoints(ClientGameTestContext context) {
+		DeepColorConfig config = DeepColorConfig.get();
+		if (!config.dither || context.computeOnClient(minecraft -> OutputState.isScrgb())) {
+			return;
+		}
+		context.setScreen(BlackAndWhiteScreen::new);
+		context.waitTicks(5);
+		OutputProbe.Capture capture = capture(context, OutputProbe::captureDitherTarget);
+		int max = (1 << capture.bits()) - 1;
+		long wrongBlack = 0;
+		long wrongWhite = 0;
+		long samples = 0;
+		for (int y = capture.height() / 8; y < capture.height() * 7 / 8; y++) {
+			for (int x = capture.width() / 8; x < capture.width() * 3 / 8; x++) {
+				wrongBlack += capture.code(x, y) != 0 ? 1 : 0;
+				wrongWhite += capture.code(capture.width() - 1 - x, y) != max ? 1 : 0;
+				samples++;
+			}
+		}
+		this.check(String.format(Locale.ROOT, "pure black and white stay exact at strength %.2f (%d and %d of %d pixels off)",
+			config.ditherStrength, wrongBlack, wrongWhite, samples), wrongBlack == 0 && wrongWhite == 0);
+		context.setScreen(() -> new TitleScreen());
+		context.waitTicks(3);
+	}
+
+	/**
+	 * Screenshots read a deeper target through an RGBA8 copy. The copy must keep the color of pixels
+	 * whose alpha is below 1, as the game's own RGBA8 screenshots do: 0.8 at alpha 0.5 stays 204, not
+	 * 102. Runs through the dither pass normally, and through the fallback copy once it has failed.
+	 */
+	private void checkScreenshotColor(ClientGameTestContext context) {
+		AtomicReference<Integer> red = new AtomicReference<>();
+		context.runOnClient(minecraft -> {
+			TextureTarget target = new TextureTarget("Deep Color test", 64, 64, GpuFormat.RGBA16_FLOAT, null);
+			RenderSystem.getDevice().createCommandEncoder().clearColorTexture(target.getColorTexture(), new Vector4f(0.8F, 0.8F, 0.8F, 0.5F));
+			Screenshot.takeScreenshot(target, image -> {
+				red.set(image.getPixel(32, 32) >> 16 & 0xFF);
+				image.close();
+				target.destroyBuffers();
+			});
+		});
+		context.waitFor(minecraft -> red.get() != null, 60);
+		this.check("screenshot keeps the color of half-transparent pixels (0.8 at alpha 0.5 -> " + red.get() + ", want 204)", Math.abs(red.get() - 204) <= 1);
+	}
+
+	/** Left half pure black, right half pure white, nothing else. */
+	private static final class BlackAndWhiteScreen extends Screen {
+		private BlackAndWhiteScreen() {
+			super(Component.empty());
+		}
+
+		@Override
+		public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+		}
+
+		@Override
+		public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float a) {
+			graphics.fill(0, 0, this.width / 2, this.height, 0xFF000000);
+			graphics.fill(this.width / 2, 0, this.width, this.height, 0xFFFFFFFF);
+		}
 	}
 
 	/** A real image, as opposed to one solid color from a failed conversion. */
@@ -242,18 +318,15 @@ public final class DeepColorClientTest implements FabricClientGameTest {
 
 	/** A resource reload closes and recompiles every pipeline. The router must not keep the old ones. */
 	private void checkReloadReleasesPipelines(ClientGameTestContext context) {
-		int[] tracked = new int[4];
-		for (int reload = 0; reload < tracked.length; reload++) {
-			if (reload > 0) {
-				CompletableFuture<Void> done = context.computeOnClient(Minecraft::reloadResourcePacks);
-				context.waitFor(minecraft -> done.isDone(), 1200);
-				context.waitTicks(5);
-			}
-			tracked[reload] = context.computeOnClient(minecraft -> PipelineRouter.trackedPipelines());
+		int[] closed = new int[3];
+		for (int reload = 0; reload < closed.length; reload++) {
+			CompletableFuture<Void> done = context.computeOnClient(Minecraft::reloadResourcePacks);
+			context.waitFor(minecraft -> done.isDone(), 1200);
+			context.waitTicks(5);
+			closed[reload] = context.computeOnClient(minecraft -> PipelineRouter.closedPipelinesTracked());
 		}
-		this.log("pipelines tracked by the router across reloads: " + Arrays.toString(tracked));
-		// The first reload may compile pipelines that were still lazy at startup, so compare after it.
-		this.check("resource reloads do not pile up closed pipelines", tracked[3] <= tracked[1]);
+		this.log("closed pipelines still tracked by the router after each reload: " + Arrays.toString(closed));
+		this.check("resource reloads do not keep closed pipelines", Arrays.stream(closed).allMatch(count -> count == 0));
 	}
 
 	private void checkModMenu() {

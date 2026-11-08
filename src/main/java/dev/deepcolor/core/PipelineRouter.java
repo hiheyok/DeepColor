@@ -238,11 +238,25 @@ public final class PipelineRouter {
 		}
 	}
 
-	/** Pipelines the router still holds data for, for tests. */
-	public static int trackedPipelines() {
+	/**
+	 * For tests: entries the router still holds for pipelines that are already closed. Anything above
+	 * 0 is a leak. The total count is no measure, because routing adds entries again for whatever is
+	 * drawn after a reload.
+	 */
+	public static int closedPipelinesTracked() {
+		int closed = 0;
 		synchronized (SOURCES) {
-			return SOURCES.size() + VARIANTS.size() + UNROUTABLE.size();
+			for (CompiledRenderPipeline pipeline : SOURCES.keySet()) {
+				closed += pipeline.isClosed() ? 1 : 0;
+			}
 		}
+		for (FrontendRenderPipeline pipeline : VARIANTS.keySet()) {
+			closed += pipeline.isClosed() ? 1 : 0;
+		}
+		for (CompiledRenderPipeline pipeline : UNROUTABLE) {
+			closed += pipeline.isClosed() ? 1 : 0;
+		}
+		return closed;
 	}
 
 	/** Called on a cache miss, which is rare after startup and always follows a shader reload. */
